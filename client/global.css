@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /**
+   * Tailwind CSS theme
+   * tailwind.config.ts expects the following color variables to be expressed as HSL values.
+   * A different format will require also updating the theme in tailwind.config.ts.
+  */
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 210 22% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 210 22% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 22% 15%;
+
+    --primary: 24 95% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 22% 15%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 210 10% 96%;
+    --muted-foreground: 210 10% 45%;
+
+    --accent: 24 95% 53%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 210 10% 92%;
+    --input: 210 10% 92%;
+    --ring: 24 95% 53%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* SolePeak Brand Colors */
+    --brand-orange: 24 95% 53%;
+    --brand-orange-dark: 24 95% 45%;
+    --brand-navy: 210 22% 15%;
+    --brand-navy-light: 210 20% 25%;
+
+    --brand-gray-50: 210 10% 98%;
+    --brand-gray-100: 210 10% 95%;
+    --brand-gray-200: 210 10% 90%;
+    --brand-gray-300: 210 10% 80%;
+    --brand-gray-400: 210 10% 65%;
+    --brand-gray-500: 210 10% 50%;
+    --brand-gray-600: 210 12% 40%;
+    --brand-gray-700: 210 15% 30%;
+    --brand-gray-800: 210 18% 20%;
+    --brand-gray-900: 210 22% 15%;
+  }
+
+  .dark {
+    --background: 210 22% 8%;
+    --foreground: 210 10% 95%;
+
+    --card: 210 20% 12%;
+    --card-foreground: 210 10% 95%;
+
+    --popover: 210 20% 12%;
+    --popover-foreground: 210 10% 95%;
+
+    --primary: 24 95% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 15% 20%;
+    --secondary-foreground: 210 10% 95%;
+
+    --muted: 210 15% 18%;
+    --muted-foreground: 210 10% 65%;
+
+    --accent: 24 95% 53%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 210 15% 20%;
+    --input: 210 15% 20%;
+    --ring: 24 95% 53%;
+
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Dark mode brand colors */
+    --brand-orange: 24 95% 53%;
+    --brand-orange-dark: 24 95% 45%;
+    --brand-navy: 210 10% 95%;
+    --brand-navy-light: 210 10% 85%;
+
+    --brand-gray-50: 210 22% 8%;
+    --brand-gray-100: 210 20% 12%;
+    --brand-gray-200: 210 18% 16%;
+    --brand-gray-300: 210 15% 22%;
+    --brand-gray-400: 210 12% 35%;
+    --brand-gray-500: 210 10% 50%;
+    --brand-gray-600: 210 10% 65%;
+    --brand-gray-700: 210 10% 75%;
+    --brand-gray-800: 210 10% 85%;
+    --brand-gray-900: 210 10% 95%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
