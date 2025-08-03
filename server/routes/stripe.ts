@@ -5,7 +5,7 @@ dotenv.config();
 import { referralDataStore, referredPurchases } from "./referral";
 import { v4 as uuidv4 } from "uuid";
 
-// Make sure your .env file is in the project root and contains:
+// Make sure your .енв file is in the project root and contains:
 // STRIPE_SECRET_KEY=sk_test_...
 // VITE_STRIPE_PUBLISHABLE_KEY=pk_test_...
 // The server uses STRIPE_SECRET_KEY, the client uses VITE_STRIPE_PUBLISHABLE_KEY

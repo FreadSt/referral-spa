@@ -12,10 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useForm } from "react-hook-form";
 import { useToast } from "@/hooks/use-toast";
-import { createCheckoutSession, stripePromise } from "@/lib/stripe";
-import { getFunctions, httpsCallable } from "firebase/functions";
-import { db } from "@/lib/firebase";
-import { doc, setDoc } from "firebase/firestore";
+import { stripePromise } from "@/lib/stripe";
+import { createCheckoutSession } from "@/lib/firebase";
 
 interface OrderModalProps {
   open: boolean;
@@ -31,15 +29,12 @@ type OrderFormValues = {
   address: string;
 };
 
-
 const OrderModal: React.FC<OrderModalProps> = ({ open, onOpenChange, product, referralCode }) => {
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<OrderFormValues>();
   const { toast } = useToast();
 
   const onSubmit = async (data: OrderFormValues) => {
     try {
-      const functions = getFunctions();
-      const createCheckoutSession = httpsCallable(functions, "createCheckoutSession");
       const result = await createCheckoutSession({
         price: "price_1RnK1iQbiHOSieT9wsaQ8nOK",
         quantity: 1,
@@ -51,12 +46,26 @@ const OrderModal: React.FC<OrderModalProps> = ({ open, onOpenChange, product, re
       });
 
       localStorage.setItem("lastPurchaseEmail", data.email);
+
       const stripe = await stripePromise;
       if (!stripe) throw new Error("Stripe failed to load");
+
       const { error } = await stripe.redirectToCheckout({ sessionId: result.data.sessionId });
       if (error) throw error;
+
+      // ✅ Уведомление при успешном создании сессии
+      toast({
+        title: "Сесія створена",
+        description: "Зараз вас перенаправить до Stripe для оплати.",
+        variant: "default",
+      });
+
     } catch (err: any) {
-      toast({ title: "Помилка оплати", description: err.message, variant: "destructive" });
+      toast({
+        title: "Помилка оплати",
+        description: err.message || "Щось пішло не так.",
+        variant: "destructive",
+      });
     }
   };
 

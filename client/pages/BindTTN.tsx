@@ -17,13 +17,11 @@ const BindTTN: React.FC = () => {
 
   const onSubmit = async (data: TTNFormValues) => {
     try {
-      // Check if order exists
       const orderQuery = await getDoc(doc(db, "orders", data.email));
       if (!orderQuery.exists()) {
-        throw new Error("Order not found for this email");
+        throw new Error("Замовлення з таким email не знайдено");
       }
 
-      // Save TTN
       await setDoc(doc(db, "ttns", data.ttn), {
         email: data.email,
         ttn: data.ttn,
@@ -31,39 +29,49 @@ const BindTTN: React.FC = () => {
         status: "pending",
       });
 
-      toast({ title: "Успіх", description: "TTN успішно прив'язано" });
+      toast({ title: "✅ Успіх", description: "TTN успішно прив'язано" });
     } catch (err: any) {
       console.error("Error in onSubmit:", err);
-      toast({ title: "Помилка", description: err.message, variant: "destructive" });
+      toast({ title: "❌ Помилка", description: err.message, variant: "destructive" });
     }
   };
 
   return (
-    <div className="max-w-md mx-auto mt-10">
-      <h1 className="text-2xl font-bold mb-4">Прив'язати TTN</h1>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <div>
-          <label className="block mb-1 font-medium">Email</label>
-          <Input
-            type="email"
-            {...register("email", { required: "Вкажіть email" })}
-            placeholder="example@email.com"
-          />
-          {errors.email && <span className="text-red-500 text-xs">{errors.email.message}</span>}
-        </div>
-        <div>
-          <label className="block mb-1 font-medium">Номер TTN</label>
-          <Input
-            {...register("ttn", { required: "Вкажіть TTN" })}
-            placeholder="Введіть номер TTN"
-            type="text"
-          />
-          {errors.ttn && <span className="text-red-500 text-xs">{errors.ttn.message}</span>}
-        </div>
-        <Button type="submit" disabled={isSubmitting} className="w-full">
-          {isSubmitting ? "Обробка..." : "Прив'язати"}
-        </Button>
-      </form>
+    <div className="px-4 py-8 sm:px-6 lg:px-8 flex justify-center">
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-6 sm:p-8 border border-gray-200">
+        <h1 className="text-2xl font-semibold text-center mb-6">Прив'язати номер TTN</h1>
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <div>
+            <label className="block mb-1 text-sm font-medium text-gray-700">Email</label>
+            <Input
+              type="email"
+              {...register("email", { required: "Вкажіть email" })}
+              placeholder="example@email.com"
+              className="focus-visible:ring-2 focus-visible:ring-primary"
+            />
+            {errors.email && <p className="text-sm text-red-500 mt-1">{errors.email.message}</p>}
+          </div>
+
+          <div>
+            <label className="block mb-1 text-sm font-medium text-gray-700">Номер TTN</label>
+            <Input
+              type="text"
+              {...register("ttn", { required: "Вкажіть TTN" })}
+              placeholder="Введіть номер TTN"
+              className="focus-visible:ring-2 focus-visible:ring-primary"
+            />
+            {errors.ttn && <p className="text-sm text-red-500 mt-1">{errors.ttn.message}</p>}
+          </div>
+
+          <Button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full transition-all duration-150 hover:scale-[1.01]"
+          >
+            {isSubmitting ? "Обробка..." : "Прив'язати TTN"}
+          </Button>
+        </form>
+      </div>
     </div>
   );
 };
