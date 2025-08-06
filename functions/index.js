@@ -17,13 +17,16 @@ const APP_URL = defineSecret("APP_URL");
 // 🔧 Init
 admin.initializeApp();
 
-// ✅ Stripe Webhook Handler - надежная реализация с Express
+// ✅ Stripe Webhook Handler - финальное решение с Express и raw middleware
 const webhookApp = express();
 
-// Настройка Express для получения raw body
-webhookApp.use("/webhook", express.raw({type: "application/json"}));
+// КРИТИЧЕСКИ ВАЖНО: используем raw middleware для получения Buffer
+webhookApp.use(express.raw({
+  type: "application/json",
+  limit: "10mb",
+}));
 
-webhookApp.post("/webhook", async (req, res) => {
+webhookApp.post("/", async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
 
@@ -35,7 +38,7 @@ webhookApp.post("/webhook", async (req, res) => {
   console.log("Request Content-Type:", req.headers["content-type"]);
   console.log("Body Type:", Buffer.isBuffer(req.body) ? "Buffer" : typeof req.body);
   console.log("Body Length:", req.body ? req.body.length : 0);
-  console.log("Body content preview:", req.body ? req.body.toString().substring(0, 100) : "No body");
+  console.log("Body preview:", req.body ? req.body.toString().substring(0, 100) : "No body");
   console.log("=== End of Webhook Request ===");
 
   try {
@@ -144,7 +147,7 @@ webhookApp.post("/webhook", async (req, res) => {
   res.json({received: true});
 });
 
-// Экспорт функции с Express app
+// Экспорт Stripe webhook с Express app
 exports.stripeWebhook = onRequest(
     {
       secrets: [STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SENDGRID_API_KEY],
