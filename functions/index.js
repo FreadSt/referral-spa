@@ -111,12 +111,32 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
 // Новое: Добавляем express.json() ТОЛЬКО для других маршрутов, если они будут добавлены
 // Применяем его после маршрута /webhook, чтобы не затрагивать вебхук
-exports.stripeWebhook = onRequest({
-  timeoutSeconds: 120,
-  memory: "256MiB",
-  secrets: [STRIPE_SECRET_KEY, SENDGRID_API_KEY, STRIPE_WEBHOOK_SECRET],
-}, app);
-
+exports.stripeWebhook = onRequest(
+  {
+    secrets: [STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SENDGRID_API_KEY],
+    timeoutSeconds: 120,
+    memory: "256MiB",
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      return res.status(405).send("Method Not Allowed");
+    }
+    const sig = req.headers["stripe-signature"];
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.rawBody,
+        sig,
+        STRIPE_WEBHOOK_SECRET.value()
+      );
+      // Дальнейшая логика обработки
+      res.json({ received: true });
+    } catch (err) {
+      console.error("⚠️ Webhook signature verification failed:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+  }
+);
 
 // ✅ Create Checkout Session
 exports.createCheckoutSession = onCall({
