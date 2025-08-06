@@ -17,144 +17,196 @@ const APP_URL = defineSecret("APP_URL");
 // 🔧 Init
 admin.initializeApp();
 
-// ✅ Stripe Webhook Handler - финальное решение с Express и raw middleware
-const webhookApp = express();
+// ✅ Stripe Webhook Handler - прямая реализация с onRequest
 
-// КРИТИЧЕСКИ ВАЖНО: используем raw middleware для получения Buffer
-webhookApp.use(express.raw({
-  type: "application/json",
-  limit: "10mb",
-}));
-
-webhookApp.post("/", async (req, res) => {
-  const sig = req.headers["stripe-signature"];
-  let event;
-
-  const stripe = new Stripe(STRIPE_SECRET_KEY.value());
-
-  // Логирование для отладки
-  console.log("=== Stripe Webhook Request ===");
-  console.log("Stripe-Signature Header:", sig);
-  console.log("Request Content-Type:", req.headers["content-type"]);
-  console.log("Body Type:", Buffer.isBuffer(req.body) ? "Buffer" : typeof req.body);
-  console.log("Body Length:", req.body ? req.body.length : 0);
-  console.log("Body preview:", req.body ? req.body.toString().substring(0, 100) : "No body");
-  console.log("=== End of Webhook Request ===");
-
-  try {
-    event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        STRIPE_WEBHOOK_SECRET.value(),
-    );
-    console.log("✅ Webhook event verified successfully, type:", event.type);
-  } catch (err) {
-    console.error("⚠️ Webhook signature verification failed:", err.message);
-    console.error("⚠️ Error details:", err);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  // Проверка на идемпотентность
-  const webhookRef = admin.firestore().collection("webhook_events").doc(event.id);
-  const webhookDoc = await webhookRef.get();
-  if (webhookDoc.exists) {
-    console.log("Webhook already processed:", event.id);
-    return res.json({received: true});
-  }
-
-  // Обработка события checkout.session.completed
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-
-    // Получаем email из разных возможных источников
-    const email = session.customer_email ||
-                     (session.customer_details && session.customer_details.email) ||
-                     null;
-
-    console.log("📧 Email sources:", {
-      customer_email: session.customer_email,
-      customer_details_email: session.customer_details && session.customer_details.email,
-      final_email: email,
-    });
-
-    // Проверка наличия email
-    if (!email) {
-      console.error("🔥 No email found in session:", session.id);
-      console.error("🔥 Session data:", JSON.stringify(session, null, 2));
-      await webhookRef.set({
-        eventId: event.id,
-        status: "failed",
-        error: "Missing email",
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      return res.status(400).send("Missing email");
+// Экспорт Stripe webhook с отключенным автопарсингом
+exports.stripeWebhook = onRequest(
+  {
+    secrets: [STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SENDGRID_API_KEY],
+    timeoutSeconds: 120,
+    memory: "256MiB",
+    // Отключаем автоматический парсинг JSON
+    invoker: 'public',
+  },
+  async (req, res) => {
+    // Устанавливаем CORS заголовки
+    res.set('Access-Control-Allow-Origin', '*');
+    
+    if (req.method === 'OPTIONS') {
+      res.set('Access-Control-Allow-Methods', 'POST');
+      res.set('Access-Control-Allow-Headers', 'Content-Type, stripe-signature');
+      res.status(204).send('');
+      return;
+    }
+    
+    if (req.method !== 'POST') {
+      return res.status(405).send('Method Not Allowed');
     }
 
-    const orderRef = admin.firestore().collection("orders").doc(email);
-    const orderDoc = await orderRef.get();
+    const sig = req.headers["stripe-signature"];
+    let event;
+    let rawBody;
 
-    if (!orderDoc.exists) {
-      console.error("🔥 Order not found for:", email);
-      await webhookRef.set({
-        eventId: event.id,
-        status: "failed",
-        error: "Order not found",
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      return res.status(404).send("Order not found");
+    const stripe = new Stripe(STRIPE_SECRET_KEY.value());
+
+    // Получение raw body - последняя попытка с чтением потока
+    try {
+      if (req.rawBody && Buffer.isBuffer(req.rawBody)) {
+        rawBody = req.rawBody;
+        console.log("✅ Using req.rawBody (Buffer)");
+      } else if (req.body && Buffer.isBuffer(req.body)) {
+        rawBody = req.body;
+        console.log("✅ Using req.body (Buffer)");
+      } else {
+        // Читаем raw данные из потока запроса
+        console.log("⚠️ Attempting to read from request stream...");
+        const chunks = [];
+        
+        // Создаем Promise для чтения потока
+        rawBody = await new Promise((resolve, reject) => {
+          let data = '';
+          
+          req.on('data', chunk => {
+            data += chunk;
+          });
+          
+          req.on('end', () => {
+            resolve(Buffer.from(data, 'utf8'));
+          });
+          
+          req.on('error', err => {
+            reject(err);
+          });
+          
+          // Если данные уже прочитаны, используем их
+          if (req.body) {
+            if (typeof req.body === 'string') {
+              resolve(Buffer.from(req.body, 'utf8'));
+            } else if (typeof req.body === 'object') {
+              resolve(Buffer.from(JSON.stringify(req.body), 'utf8'));
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error reading raw body:", error);
+      return res.status(400).send("Error reading request body");
     }
 
-    const orderData = orderDoc.data();
+    // Логирование для отладки
+    console.log("=== Stripe Webhook Request ===");
+    console.log("Stripe-Signature Header:", sig);
+    console.log("Request Content-Type:", req.headers["content-type"]);
+    console.log("Raw Body Type:", Buffer.isBuffer(rawBody) ? "Buffer" : typeof rawBody);
+    console.log("Raw Body Length:", rawBody ? rawBody.length : 0);
+    console.log("Raw Body preview:", rawBody ? rawBody.toString().substring(0, 100) : "No body");
+    console.log("=== End of Webhook Request ===");
 
-    if (orderData.status === "paid") {
-      console.log("Order already processed for:", email);
-      await webhookRef.set({
-        eventId: event.id,
-        status: "skipped",
-        reason: "Already processed",
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+    try {
+      event = stripe.webhooks.constructEvent(
+          rawBody,
+          sig,
+          STRIPE_WEBHOOK_SECRET.value(),
+      );
+      console.log("✅ Webhook event verified successfully, type:", event.type);
+    } catch (err) {
+      console.error("⚠️ Webhook signature verification failed:", err.message);
+      console.error("⚠️ Error details:", err);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Проверка на идемпотентность
+    const webhookRef = admin.firestore().collection("webhook_events").doc(event.id);
+    const webhookDoc = await webhookRef.get();
+    if (webhookDoc.exists) {
+      console.log("Webhook already processed:", event.id);
       return res.json({received: true});
     }
 
-    // Отправка email подтверждения
-    sendgrid.setApiKey(SENDGRID_API_KEY.value());
-    try {
-      await sendOrderConfirmationEmail(email, orderData.name, orderData.phone, orderData.address, "Ще без TTN");
-      console.log("✅ Order confirmation email sent to:", email);
-    } catch (err) {
-      console.error("🔥 SendGrid error:", (err.response && err.response.body) || err.message);
+    // Обработка события checkout.session.completed
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+
+      // Получаем email из разных возможных источников
+      const email = session.customer_email ||
+        (session.customer_details && session.customer_details.email) ||
+        null;
+
+      console.log("📧 Email sources:", {
+        customer_email: session.customer_email,
+        customer_details_email: session.customer_details && session.customer_details.email,
+        final_email: email,
+      });
+
+      // Проверка наличия email
+      if (!email) {
+        console.error("🔥 No email found in session:", session.id);
+        console.error("🔥 Session data:", JSON.stringify(session, null, 2));
+        await webhookRef.set({
+          eventId: event.id,
+          status: "failed",
+          error: "Missing email",
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return res.status(400).send("Missing email");
+      }
+
+      const orderRef = admin.firestore().collection("orders").doc(email);
+      const orderDoc = await orderRef.get();
+
+      if (!orderDoc.exists) {
+        console.error("🔥 Order not found for:", email);
+        await webhookRef.set({
+          eventId: event.id,
+          status: "failed",
+          error: "Order not found",
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return res.status(404).send("Order not found");
+      }
+
+      const orderData = orderDoc.data();
+
+      if (orderData.status === "paid") {
+        console.log("Order already processed for:", email);
+        await webhookRef.set({
+          eventId: event.id,
+          status: "skipped",
+          reason: "Already processed",
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return res.json({received: true});
+      }
+
+      // Отправка email подтверждения
+      sendgrid.setApiKey(SENDGRID_API_KEY.value());
+      try {
+        await sendOrderConfirmationEmail(email, orderData.name, orderData.phone, orderData.address, "Ще без TTN");
+        console.log("✅ Order confirmation email sent to:", email);
+      } catch (err) {
+        console.error("🔥 SendGrid error:", (err.response && err.response.body) || err.message);
+      }
+
+      // Обновление статуса заказа
+      await orderRef.update({
+        status: "paid",
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        stripeSessionId: session.id,
+      });
+
+      await webhookRef.set({
+        eventId: event.id,
+        status: "success",
+        sessionId: session.id,
+        customerEmail: email,
+        processedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log("✅ Order processed successfully for:", email);
     }
 
-    // Обновление статуса заказа
-    await orderRef.update({
-      status: "paid",
-      paidAt: admin.firestore.FieldValue.serverTimestamp(),
-      stripeSessionId: session.id,
-    });
-
-    await webhookRef.set({
-      eventId: event.id,
-      status: "success",
-      sessionId: session.id,
-      customerEmail: email,
-      processedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    console.log("✅ Order processed successfully for:", email);
-  }
-
-  res.json({received: true});
-});
-
-// Экспорт Stripe webhook с Express app
-exports.stripeWebhook = onRequest(
-    {
-      secrets: [STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SENDGRID_API_KEY],
-      timeoutSeconds: 120,
-      memory: "256MiB",
-    },
-    webhookApp,
+    res.json({received: true});
+  },
 );
 
 // ✅ Create Checkout Session
