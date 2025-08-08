@@ -28,25 +28,6 @@ export const createPaymentIntent = async (amount: number, currency = "usd") => {
   }
 };
 
-export const createCheckoutSession = async (params: {
-  quantity: number;
-  price: string;
-  customer_email: string;
-  referralCode: string
-}) => {
-  try {
-    const response = await fetch("/api/create-checkout-session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || "Failed to create checkout session");
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("Error creating checkout session:", error);
-    throw error;
-  }
-};
+// ✅ OLD createCheckoutSession function removed - now using Firebase Stripe Extension
+// The createCheckoutSession function is now handled in client/lib/firebase.ts
+// through the Firebase Stripe Payments Extension

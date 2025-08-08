@@ -14,6 +14,9 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2025-06-30.basil",
 });
 
+// ⚠️ DEPRECATED: This function is no longer used
+// We now use Firebase Stripe Payments Extension instead
+// The createCheckoutSession is handled in client/lib/firebase.ts
 export const createCheckoutSession: RequestHandler = async (req, res) => {
   try {
     const { price, quantity = 1, customer_email, referralCode } = req.body;

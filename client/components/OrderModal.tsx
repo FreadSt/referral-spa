@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useForm } from "react-hook-form";
 import { useToast } from "@/hooks/use-toast";
-import { stripePromise } from "@/lib/stripe";
 import { createCheckoutSession } from "@/lib/firebase";
 
 interface OrderModalProps {
@@ -35,9 +34,8 @@ const OrderModal: React.FC<OrderModalProps> = ({ open, onOpenChange, product, re
 
   const onSubmit = async (data: OrderFormValues) => {
     try {
+      // ✅ NEW: Using Firebase Stripe Extension
       const result = await createCheckoutSession({
-        price: "price_1RnK1iQbiHOSieT9wsaQ8nOK",
-        quantity: 1,
         customer_email: data.email,
         referralCode: referralCode || "",
         name: data.name,
@@ -47,13 +45,9 @@ const OrderModal: React.FC<OrderModalProps> = ({ open, onOpenChange, product, re
 
       localStorage.setItem("lastPurchaseEmail", data.email);
 
-      const stripe = await stripePromise;
-      if (!stripe) throw new Error("Stripe failed to load");
+      // Функция createCheckoutSession теперь сама перенаправляет на Stripe
+      // Больше не нужно вызывать stripe.redirectToCheckout
 
-      const { error } = await stripe.redirectToCheckout({ sessionId: result.data.sessionId });
-      if (error) throw error;
-
-      // ✅ Уведомление при успешном создании сессии
       toast({
         title: "Сесія створена",
         description: "Зараз вас перенаправить до Stripe для оплати.",
@@ -61,6 +55,7 @@ const OrderModal: React.FC<OrderModalProps> = ({ open, onOpenChange, product, re
       });
 
     } catch (err: any) {
+      console.error("Checkout error:", err);
       toast({
         title: "Помилка оплати",
         description: err.message || "Щось пішло не так.",
@@ -98,12 +93,14 @@ const OrderModal: React.FC<OrderModalProps> = ({ open, onOpenChange, product, re
             {errors.address && <span className="text-red-500 text-xs">{errors.address.message}</span>}
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={isSubmitting} className="w-full">
-              {isSubmitting ? "Обробка..." : `Оплатити $${product.price}`}
-            </Button>
             <DialogClose asChild>
-              <Button variant="outline" className="w-full">Скасувати</Button>
+              <Button type="button" variant="outline">
+                Скасувати
+              </Button>
             </DialogClose>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Обробка..." : `Оплатити ${product.price}₴`}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
