@@ -11,10 +11,6 @@ node_modules
 dist
 dist-ssr
 *.local
-.env
-.serviceAccountKey.json
-serviceAccountKey.json
-
 
 # Editor directories and files
 .vscode/*
@@ -27,4 +23,25 @@ serviceAccountKey.json
 *.sln
 *.sw?
 
-.config/
+# Environment variables and secrets
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*
+*.env
+.en
+.en.*
+
+# Firebase
+.firebase/
+.firebaserc.local
+
+# Build outputs
+build/
+dist/
+
+# Temporary files
+temp/
+tmp/
