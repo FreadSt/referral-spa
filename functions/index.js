@@ -6,6 +6,7 @@ const express = require("express");
 const axios = require("axios");
 const sendgrid = require("@sendgrid/mail");
 const Stripe = require("stripe");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 
 // 🔐 Secrets
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -280,6 +281,196 @@ exports.sendReferralLinks = onSchedule({
 
     sendgrid.setApiKey(SENDGRID_API_KEY.value());
     await sendReferralEmail(ttnData.email, referralCode, APP_URL.value());
+  }
+});
+
+// ✅ Firestore payment creation trigger: reliably resolve buyer email
+exports.onPaymentCreated = onDocumentCreated({
+  document: "customers/{uid}/payments/{paymentId}",
+  secrets: [SENDGRID_API_KEY, STRIPE_SECRET_KEY],
+}, async (event) => {
+  const db = admin.firestore();
+  const ref = event.data.ref;
+  const data = event.data.data() || {};
+  const { uid, paymentId } = event.params;
+
+  // Only proceed for succeeded payments
+  if (!data || data.status !== "succeeded") {
+    console.log("Payment not succeeded yet; skipping", { uid, paymentId, status: data?.status });
+    return;
+  }
+
+  const shouldProcess = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const docData = snap.data() || {};
+
+    if (docData.emailSent) return false;
+    if (docData.emailSending) return false;
+
+    tx.update(ref, {
+      emailSending: true,
+      emailProcessStarted: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return true;
+  });
+
+  if (!shouldProcess) {
+    console.log("Email already processed or in-flight for", paymentId);
+    return;
+  }
+
+  const stripe = new Stripe(STRIPE_SECRET_KEY.value());
+
+  try {
+    // Retrieve PaymentIntent with expansions for richer billing details
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentId, {
+      expand: ["latest_charge", "payment_method", "charges.data.balance_transaction"],
+    });
+
+    // Try to find the originating Checkout Session to get customer_details.email
+    let checkoutSessionEmail = null;
+    try {
+      const sessions = await stripe.checkout.sessions.list({ payment_intent: paymentIntent.id, limit: 1 });
+      const session = sessions.data[0];
+      if (session) {
+        checkoutSessionEmail = session.customer_details?.email || session.customer_email || null;
+      }
+    } catch (e) {
+      console.warn("Failed to list checkout sessions for payment", paymentIntent.id, e.message);
+    }
+
+    // Fallbacks: customer email -> charge billing_details.email -> payment method billing_details.email -> auth user email
+    let customerEmail = checkoutSessionEmail;
+
+    if (!customerEmail && paymentIntent.customer) {
+      try {
+        const customer = await stripe.customers.retrieve(paymentIntent.customer);
+        if (!customer.deleted) {
+          customerEmail = customer.email || customerEmail;
+        }
+      } catch (e) {
+        console.warn("Failed to retrieve customer", paymentIntent.customer, e.message);
+      }
+    }
+
+    if (!customerEmail) {
+      const latestCharge = typeof paymentIntent.latest_charge === "object"
+        ? paymentIntent.latest_charge
+        : (paymentIntent.charges?.data?.[0] || null);
+      customerEmail = latestCharge?.billing_details?.email || customerEmail;
+    }
+
+    if (!customerEmail && paymentIntent.payment_method && typeof paymentIntent.payment_method === "object") {
+      customerEmail = paymentIntent.payment_method?.billing_details?.email || customerEmail;
+    }
+
+    if (!customerEmail) {
+      try {
+        const userRecord = await admin.auth().getUser(uid);
+        customerEmail = userRecord.email || null;
+      } catch (e) {
+        console.warn("Failed to get auth user email for", uid, e.message);
+      }
+    }
+
+    if (!customerEmail) {
+      console.error("No customer email could be resolved for payment", paymentId);
+      await ref.update({
+        emailSending: false,
+        emailError: "No customer email resolved",
+        lastEmailAttempt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
+    // Derive buyer display info
+    const latestCharge = typeof paymentIntent.latest_charge === "object"
+      ? paymentIntent.latest_charge
+      : (paymentIntent.charges?.data?.[0] || null);
+
+    const name = latestCharge?.billing_details?.name || paymentIntent.billing_details?.name || "Не указано";
+    const phone = latestCharge?.billing_details?.phone || paymentIntent.billing_details?.phone || "Не указан";
+    const address = latestCharge?.billing_details?.address?.line1 || paymentIntent.billing_details?.address?.line1 || "Не указан";
+
+    const amountCents = paymentIntent.amount_received || paymentIntent.amount || data.presentation_amount || 0;
+    const currency = (paymentIntent.currency || data.presentation_currency || "uah").toUpperCase();
+    const amount = (amountCents / 100).toFixed(2);
+
+    // Send emails
+    sendgrid.setApiKey(SENDGRID_API_KEY.value());
+    const FROM_EMAIL = "thiswolfram@gmail.com";
+
+    try {
+      await sendgrid.send({
+        to: "kholiawkodev@gmail.com",
+        from: FROM_EMAIL,
+        subject: "🎉 Новый заказ - Платеж успешен!",
+        html: `<h2>Новый заказ</h2>
+               <p><b>Имя:</b> ${name}</p>
+               <p><b>Телефон:</b> ${phone}</p>
+               <p><b>Адрес:</b> ${address}</p>
+               <p><b>Сумма:</b> ${amount} ${currency}</p>`,
+      });
+
+      await sendgrid.send({
+        to: customerEmail,
+        from: FROM_EMAIL,
+        subject: "Спасибо за заказ!",
+        html: `<h2>Спасибо за заказ!</h2>
+               <p>Мы получили вашу оплату на сумму ${amount} ${currency}.</p>`,
+      });
+    } catch (sgError) {
+      console.error("SendGrid error:", sgError?.response?.body || sgError);
+      await ref.update({
+        emailSending: false,
+        emailError: sgError?.response?.body?.errors?.[0]?.message || sgError.message || "Unknown SendGrid error",
+        lastEmailAttempt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
+    // Save or update order keyed by email (consistent with existing createCheckoutSession)
+    const orderRef = db.collection("orders").doc(customerEmail);
+    const orderData = {
+      email: customerEmail,
+      userId: uid,
+      paymentId,
+      amount: amountCents,
+      currency,
+      status: "paid",
+      paidAt: admin.firestore.FieldValue.serverTimestamp(),
+      name,
+      phone,
+      address,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    const orderSnap = await orderRef.get();
+    if (orderSnap.exists) {
+      await orderRef.update(orderData);
+    } else {
+      await orderRef.set({ ...orderData, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
+
+    await ref.update({
+      emailSent: true,
+      emailSending: false,
+      emailSentAt: admin.firestore.FieldValue.serverTimestamp(),
+      customerEmail,
+    });
+
+    console.log("Email processing completed successfully for payment", paymentId, customerEmail);
+  } catch (error) {
+    console.error("Error processing onPaymentCreated:", error);
+    try {
+      await ref.update({
+        emailSending: false,
+        emailError: error.message,
+        lastEmailAttempt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      console.error("Failed to update payment doc after error", e);
+    }
   }
 });
 
