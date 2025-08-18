@@ -30,7 +30,16 @@ type OrderRow = {
   receivedAt?: Date | null;
   referralSent?: boolean;
   referralCode?: string;
+  name?: string;
+  phone?: string;
+  cashbackPending?: boolean;
+  cashbackPendingAt?: Date | null;
+  cashbackSent?: boolean;
+  cashbackAmount?: number;
+  address?: string;
 };
+
+const CASHBACK_DELAY_MS = 1 * 60 * 1000; // 1 минута для теста; в проде 17 * 24 * 60 * 60 * 1000
 
 const BindTTN: React.FC = () => {
   const { register, handleSubmit, formState: { errors, isSubmitting }, reset } = useForm<TTNFormValues>();
@@ -42,7 +51,6 @@ const BindTTN: React.FC = () => {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  // Важно: регион us-central1, т.к. твои функции деплоятся туда
   const functions = getFunctions(undefined, "us-central1");
   const refreshShipmentStatus = httpsCallable(functions, "refreshShipmentStatus");
 
@@ -60,15 +68,12 @@ const BindTTN: React.FC = () => {
   const fetchOrders = async () => {
     setLoadingOrders(true);
     try {
-      // 1) Получаем заказы — одна сортировка по createdAt НЕ требует композитного индекса
       const ordersSnap = await getDocs(
         query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(100))
       );
 
-      // 2) Получаем все TTN
       const ttnSnap = await getDocs(collection(db, "ttns"));
 
-      // Собираем map по email (берём самый свежий по createdAt, если их несколько)
       const ttnByEmail = new Map<string, { ttn: string; status?: string; createdAt?: Date | null; receivedAt?: Date | null; referralSent?: boolean; referralCode?: string }>();
       ttnSnap.forEach((d) => {
         const t = d.data() as any;
@@ -87,22 +92,49 @@ const BindTTN: React.FC = () => {
         }
       });
 
+      // Добавлено: Получаем referrals
+      const referralsSnap = await getDocs(collection(db, "referrals"));
+      const referralsByEmail = new Map<string, { createdAt?: Date | null; cashbackPending?: boolean; cashbackPendingAt?: Date | null; cashbackSent?: boolean; cashbackAmount?: number }>();
+      referralsSnap.forEach((d) => {
+        const r = d.data() as any;
+        if (!r?.email) return;
+        const current = referralsByEmail.get(r.email);
+        const created = toDateSafe(r.createdAt);
+        if (!current || (created && (!current.createdAt || created > current.createdAt))) {
+          referralsByEmail.set(r.email, {
+            createdAt: created,
+            cashbackPending: r.cashbackPending ?? false,
+            cashbackPendingAt: toDateSafe(r.cashbackPendingAt),
+            cashbackSent: r.cashbackSent ?? false,
+            cashbackAmount: r.cashbackAmount || undefined,
+          });
+        }
+      });
+
       const rows: OrderRow[] = [];
       ordersSnap.forEach((d) => {
         const data = d.data() as any;
         const email = data.email || "";
         const createdAt = toDateSafe(data.createdAt);
-        const link = ttnByEmail.get(email);
+        const ttnLink = ttnByEmail.get(email);
+        const referralLink = referralsByEmail.get(email);
 
         rows.push({
           id: d.id,
           email,
           createdAt,
-          ttn: link?.ttn,
-          status: link?.status,
-          receivedAt: link?.receivedAt,
-          referralSent: link?.referralSent,
-          referralCode: link?.referralCode,
+          ttn: ttnLink?.ttn,
+          status: ttnLink?.status,
+          receivedAt: ttnLink?.receivedAt,
+          referralSent: ttnLink?.referralSent,
+          referralCode: ttnLink?.referralCode,
+          name: data.name || data.metadata?.name || undefined,
+          phone: data.phone || data.metadata?.phone || undefined,
+          address: data.address || data.metadata?.address || undefined,
+          cashbackPending: referralLink?.cashbackPending,
+          cashbackPendingAt: referralLink?.cashbackPendingAt,
+          cashbackSent: referralLink?.cashbackSent,
+          cashbackAmount: referralLink?.cashbackAmount,
         });
       });
 
@@ -121,10 +153,11 @@ const BindTTN: React.FC = () => {
 
   useEffect(() => {
     fetchOrders();
+    const autoRefresh = setInterval(fetchOrders, 10000); // Auto-refresh каждые 10 сек
+    return () => clearInterval(autoRefresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Реал-тайм таймер (обновляется каждую секунду для всех расширенных строк)
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(new Date());
@@ -134,9 +167,6 @@ const BindTTN: React.FC = () => {
 
   const onSubmit = async (data: TTNFormValues) => {
     try {
-      // Видалено перевірку на існування замовлення, щоб дозволити прив'язку для будь-яких email/TTN
-
-      // Создаём/обновляем документ TTN (id документа = номер TTN)
       await setDoc(doc(db, "ttns", data.ttn), {
         email: data.email,
         ttn: data.ttn,
@@ -144,7 +174,6 @@ const BindTTN: React.FC = () => {
         status: "pending",
       }, { merge: true });
 
-      // Сразу дергаем обновление статуса только для этого TTN
       try {
         await refreshShipmentStatus({ ttn: data.ttn });
       } catch (e: any) {
@@ -167,7 +196,6 @@ const BindTTN: React.FC = () => {
   const handleRefreshAll = async () => {
     setRefreshingAll(true);
     try {
-      // Пустой payload => функция сама обновит все pending
       const res: any = await refreshShipmentStatus({});
       const updated = res?.data?.updated ?? 0;
       toast({ title: "🔄 Оновлено", description: `Оновлено статусів: ${updated}` });
@@ -185,9 +213,9 @@ const BindTTN: React.FC = () => {
   };
 
   const renderStatus = (status?: string) => {
-    if (!status) return "—";                // нет запроса к API / еще не обновляли
+    if (!status) return "—";
     if (status === "pending") return "Очікує оновлення";
-    return status;                          // текст из Nova Poshta (может быть «Номер не знайдено», «Видано», и т.п.)
+    return status;
   };
 
   const formatTimeLeft = (seconds: number): string => {
@@ -255,6 +283,9 @@ const BindTTN: React.FC = () => {
             <thead>
             <tr className="bg-gray-100 border-b border-gray-200">
               <th className="py-2 px-4 text-left">Email</th>
+              <th className="py-2 px-4 text-left">Ім'я</th>
+              <th className="py-2 px-4 text-left">Телефон</th>
+              <th className="py-2 px-4 text-left">Адреса</th>
               <th className="py-2 px-4 text-left">Дата створення</th>
               <th className="py-2 px-4 text-left">TTN</th>
               <th className="py-2 px-4 text-left">Статус</th>
@@ -268,6 +299,9 @@ const BindTTN: React.FC = () => {
                   className="border-b border-gray-200 cursor-pointer hover:bg-gray-50"
                 >
                   <td className="py-2 px-4">{o.email || "-"}</td>
+                  <td className="py-2 px-4">{o.name || "-"}</td>
+                  <td className="py-2 px-4">{o.phone || "-"}</td>
+                  <td className="py-2 px-4">{o.address || "-"}</td>
                   <td className="py-2 px-4">
                     {o.createdAt ? o.createdAt.toLocaleString() : "-"}
                   </td>
@@ -276,33 +310,58 @@ const BindTTN: React.FC = () => {
                 </tr>
                 {expandedRow === o.id && (
                   <tr>
-                    <td colSpan={4} className="p-4 bg-gray-50 border-b border-gray-200">
+                    <td colSpan={6} className="p-4 bg-gray-50 border-b border-gray-200">
                       {o.status === "Відправлення отримано" && o.receivedAt ? (
-                        (() => {
-                          const deadline = new Date(o.receivedAt.getTime() + 30 * 1000);
-                          const timeLeftSeconds = Math.max(0, (deadline.getTime() - currentTime.getTime()) / 1000);
-                          if (timeLeftSeconds > 0) {
-                            return (
-                              <div>
-                                <p className="text-sm font-medium text-gray-700">Залишилося до генерації реферальної посилання:</p>
-                                <p className="text-lg font-bold text-primary">{formatTimeLeft(timeLeftSeconds)}</p>
-                              </div>
-                            );
-                          } else if (o.referralSent && o.referralCode) {
-                            const baseUrl = window.location.origin; // Замініть на ваш APP_URL, якщо є env
-                            const referralLink = `${baseUrl}/?code=${o.referralCode}`;
-                            return (
-                              <div>
-                                <p className="text-sm font-medium text-green-600">✅ Посилання сгенеровано та надіслано</p>
-                                <a href={referralLink} className="text-blue-500 underline" target="_blank" rel="noopener noreferrer">
-                                  {referralLink}
-                                </a>
-                              </div>
-                            );
-                          } else {
-                            return <p className="text-sm text-gray-500">Очікує генерації (оновіть сторінку)</p>;
-                          }
-                        })()
+                        <>
+                          {(() => {
+                            const deadline = new Date(o.receivedAt.getTime() + 1 * 60 * 1000); // REFERRAL_DELAY_MS
+                            const timeLeftSeconds = Math.max(0, (deadline.getTime() - currentTime.getTime()) / 1000);
+                            if (timeLeftSeconds > 0) {
+                              return (
+                                <div className="mb-4">
+                                  <p className="text-sm font-medium text-gray-700">Залишилося до генерації реферальної посилання:</p>
+                                  <p className="text-lg font-bold text-primary">{formatTimeLeft(timeLeftSeconds)}</p>
+                                </div>
+                              );
+                            } else if (o.referralSent && o.referralCode) {
+                              const baseUrl = window.location.origin;
+                              const referralLink = `${baseUrl}/?code=${o.referralCode}`;
+                              return (
+                                <div className="mb-4">
+                                  <p className="text-sm font-medium text-green-600">✅ Посилання сгенеровано та надіслано</p>
+                                  <a href={referralLink} className="text-blue-500 underline" target="_blank" rel="noopener noreferrer">
+                                    {referralLink}
+                                  </a>
+                                </div>
+                              );
+                            } else {
+                              return <p className="text-sm text-gray-500 mb-4">Очікує генерації (оновіть сторінку)</p>;
+                            }
+                          })()}
+                          {/* Добавлено: Раздел для кешбека */}
+                          {o.cashbackPending && o.cashbackPendingAt ? (
+                            (() => {
+                              const cashbackDeadline = new Date(o.cashbackPendingAt.getTime() + CASHBACK_DELAY_MS);
+                              const cashbackTimeLeftSeconds = Math.max(0, (cashbackDeadline.getTime() - currentTime.getTime()) / 1000);
+                              if (cashbackTimeLeftSeconds > 0) {
+                                return (
+                                  <div>
+                                    <p className="text-sm font-medium text-gray-700">Залишилося до видачі кешбеку:</p>
+                                    <p className="text-lg font-bold text-primary">{formatTimeLeft(cashbackTimeLeftSeconds)}</p>
+                                  </div>
+                                );
+                              } else if (o.cashbackSent && o.cashbackAmount) {
+                                return (
+                                  <p className="text-sm font-medium text-green-600">✅ Кешбек надіслано: {(o.cashbackAmount / 100).toFixed(2)} USD</p>
+                                );
+                              } else {
+                                return <p className="text-sm text-gray-500">Очікує обробки кешбеку (оновіть сторінку)</p>;
+                              }
+                            })()
+                          ) : (
+                            <p className="text-sm text-gray-500">Кешбек недоступний (немає рефералів з покупкою)</p>
+                          )}
+                        </>
                       ) : (
                         <p className="text-sm text-gray-500">Таймер доступний тільки для статусу "Відправлення отримано"</p>
                       )}
@@ -313,7 +372,7 @@ const BindTTN: React.FC = () => {
             ))}
             {orders.length === 0 && (
               <tr>
-                <td colSpan={4} className="py-4 text-center text-gray-500">
+                <td colSpan={6} className="py-4 text-center text-gray-500">
                   Замовлень не знайдено
                 </td>
               </tr>

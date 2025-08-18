@@ -26,6 +26,8 @@ const sendReferralEmail = async (email, referralCode, appUrl) => {
   }
 };
 
+const REFERRAL_DELAY_MS = 1 * 60 * 1000; // 1 мин для теста; в проде: 17 * 24 * 60 * 60 * 1000 (17 дней)
+
 exports.processReferralDue = onSchedule({
   schedule: "every 1 minutes",
   secrets: [SENDGRID_API_KEY, APP_URL],
@@ -33,7 +35,7 @@ exports.processReferralDue = onSchedule({
   console.log("📅 processReferralDue started at", new Date().toISOString());
   const ttnCol = admin.firestore().collection("ttns");
   const now = Date.now();
-  const thresholdMillis = now - 30 * 1000; // 30 seconds
+  const thresholdMillis = now - REFERRAL_DELAY_MS
   const thresholdTimestamp = admin.firestore.Timestamp.fromMillis(thresholdMillis);
 
   try {

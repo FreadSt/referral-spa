@@ -1,76 +1,56 @@
-import React, { useEffect, useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import React, { useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom"; // Заменил location на useSearchParams для consistency
 import { Button } from "@/components/ui/button";
 import Header from "@/components/Header";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase.ts";
-
-const activationDelay = 10 * 1000; // 10 сек для теста
+import { useToast } from "@/hooks/use-toast"; // Добавьте для уведомлений об ошибках (если есть в проекте)
 
 const Success: React.FC = () => {
   const navigate = useNavigate();
-  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { toast } = useToast(); // Если нет — удалите и используйте console.error
   const functions = getFunctions();
-
-  const [referralData, setReferralData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const confirmPayment = async () => {
-      const sessionId = new URLSearchParams(location.search).get("session_id");
-      if (sessionId) {
-        const email = localStorage.getItem("lastPurchaseEmail");
-        if (email) {
-          const orderDoc = await getDoc(doc(db, "orders", email));
-          if (orderDoc.exists()) {
-            const orderData = orderDoc.data();
-            const createShipment = httpsCallable(functions, "createNovaPoshtaShipment");
-            await createShipment({
-              email,
-              name: orderData.name,
-              phone: orderData.phone,
-              address: orderData.address,
-            });
-            await setDoc(doc(db, "orders", email), { status: "shipped" }, { merge: true });
-          }
-        }
-      }
-    };
-    confirmPayment();
-  }, [location, functions]);
-
-  useEffect(() => {
-    const fetchReferral = async () => {
-      const email = localStorage.getItem("lastPurchaseEmail");
-      if (!email) {
-        setLoading(false);
+      const sessionId = searchParams.get("session_id");
+      if (!sessionId) {
+        console.warn("No session_id in URL");
         return;
       }
+
+      const email = localStorage.getItem("lastPurchaseEmail");
+      if (!email) {
+        toast({ title: "Ошибка", description: "Email не найден. Повторите покупку.", variant: "destructive" });
+        return;
+      }
+
       try {
-        const res = await fetch(`/api/referral/${encodeURIComponent(email)}`);
-        if (res.ok) {
-          const data = await res.json();
-          setReferralData(data);
+        const orderRef = doc(db, "orders", email); // Если ID=email — ок, но рассмотрите смену на paymentId
+        const orderDoc = await getDoc(orderRef);
+        if (orderDoc.exists()) {
+          const orderData = orderDoc.data();
+          const createShipment = httpsCallable(functions, "createNovaPoshtaShipment");
+          await createShipment({
+            email,
+            name: orderData.name,
+            phone: orderData.phone,
+            address: orderData.address,
+          });
+          await setDoc(orderRef, { status: "shipped" }, { merge: true });
+        } else {
+          console.warn("Order not found for email:", email);
         }
-      } finally {
-        setLoading(false);
+      } catch (err: any) {
+        console.error("Payment confirmation error:", err);
+        toast({ title: "Ошибка", description: "Не удалось подтвердить заказ. Свяжитесь с поддержкой.", variant: "destructive" });
       }
     };
-    fetchReferral();
-  }, []);
 
-  const isActive = referralData && (Date.now() - referralData.purchaseTimestamp >= activationDelay);
-  const referralLink = referralData ? `${window.location.origin}/product?ref=${referralData.referralCode}` : "";
-
-  const handleCopy = () => {
-    if (referralLink) {
-      navigator.clipboard.writeText(referralLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }
-  };
+    confirmPayment();
+  }, [searchParams, functions, toast]);
 
   return (
     <div className="min-h-screen flex flex-col bg-brand-gray-50">

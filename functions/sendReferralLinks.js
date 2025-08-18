@@ -50,7 +50,10 @@ exports.sendReferralLinks = onSchedule({
         email: ttnData.email,
         ttn: ttnData.ttn,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        cashbackPending: true,
+        cashbackPendingAt: admin.firestore.FieldValue.serverTimestamp(), // отметка времени, когда стартует отсчёт
       });
+
 
       await sendReferralEmail(ttnData.email, referralCode, APP_URL.value());
 
