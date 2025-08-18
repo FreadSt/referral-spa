@@ -244,11 +244,10 @@ exports.onPaymentCreated = onDocumentCreated(
       try {
         // Владельцу
         await sendgrid.send({
-          to: "kholiawkodev@gmail.com",
+          to: email,
           from: fromEmail,
           subject: "🎉 Новый заказ — платеж успешен",
           html: ownerHtml,
-          // ВАЖНО: можно сразу ответить клиенту
           replyTo: { email },
         });
 
@@ -273,7 +272,7 @@ exports.onPaymentCreated = onDocumentCreated(
 
       // Сохраняем заказ
       try {
-        const orderRef = admin.firestore().collection("orders").doc(`${paymentId}_${email}`);
+        const orderRef = admin.firestore().collection("orders").doc(paymentId);
         const orderData = {
           email,
           userId: uid,

@@ -29,7 +29,7 @@ exports.createCheckoutSession = onCall(
 
     const stripeClient = stripeLib(STRIPE_SECRET_KEY.value());
 
-    // Создаём Customer (просто, без поиска по email — достаточно для текущей логики)
+    // ✅ Как было — вручную создаём Customer, чтобы экстеншн использовал его
     let customer;
     try {
       customer = await stripeClient.customers.create({
@@ -44,7 +44,18 @@ exports.createCheckoutSession = onCall(
       throw new HttpsError("internal", "Failed to create customer");
     }
 
-    // Документ для Stripe Extension
+    // ✅ Метаданные (email + рефкод, если есть)
+    const metadata = {
+      ...data.metadata,
+      email: data.customer_email || data.metadata?.email || null,
+    };
+
+    if (data.referralCode) {
+      metadata.referralCode = data.referralCode;
+      console.log("🔗 Adding referral code to session:", data.referralCode);
+    }
+
+    // ✅ Документ для Stripe Extension (как у тебя было)
     const sessionRef = admin.firestore().collection(`customers/${uid}/checkout_sessions`).doc();
 
     await sessionRef.set({
@@ -52,23 +63,17 @@ exports.createCheckoutSession = onCall(
       line_items: data.line_items,
       success_url: data.success_url,
       cancel_url: data.cancel_url,
-      customer: customer.id,
-      // Для обратной совместимости экстеншна
-      customer_email: data.customer_email,
-      // Кладём email в metadata, чтобы забрать его на вебхуке при любых раскладах
-      metadata: {
-        ...data.metadata,
-        email: data.customer_email || data.metadata?.email || null,
-      },
-      // Техслужебные поля (не мешают экстеншну)
+      customer: customer.id,           // ВАЖНО: используем созданного выше Customer
+      customer_email: data.customer_email, // оставляем для обратной совместимости
+      metadata: metadata,
+
+      // техслужебное — как было
       emailSent: false,
       emailSending: false,
       emailError: null,
-      // expires_at — по желанию (минимум 30 минут)
-      // expires_at: Math.floor(Date.now() / 1000) + 1800,
     });
 
-    // Ждём URL от экстеншна
+    // ✅ Ждём url от экстеншна (как было)
     return new Promise((resolve, reject) => {
       const unsubscribe = sessionRef.onSnapshot((snap) => {
         const sessionData = snap.data();

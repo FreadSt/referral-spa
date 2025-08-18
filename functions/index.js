@@ -12,6 +12,7 @@ const checkShipmentStatus = require('./checkShipmentStatus');
 const sendReferralLinks = require('./sendReferralLinks');
 const runReferralCheck = require('./runReferralCheck');
 const processReferralDue = require('./processReferralDue');
+const cashbackPayment = require('./cashbackPayment');
 
 exports.onPaymentCreated = onPaymentCreated.onPaymentCreated;
 exports.createCheckoutSession = createCheckoutSession.createCheckoutSession;
@@ -23,3 +24,5 @@ exports.checkShipmentStatus = checkShipmentStatus.checkShipmentStatus;
 exports.sendReferralLinks = sendReferralLinks.sendReferralLinks;
 exports.runReferralCheck = runReferralCheck.runReferralCheck;
 exports.processReferralDue = processReferralDue.processReferralDue;
+exports.cashbackPayment = cashbackPayment.cashbackPayment;
+

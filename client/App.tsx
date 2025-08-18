@@ -9,36 +9,33 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import Product from "./pages/Product";
 import NotFound from "./pages/NotFound";
-import { useEffect } from "react";
 import BindTTN from "@/pages/BindTTN.tsx";
 import Success from "@/pages/Success.tsx";
+import { useReferralCode } from '@/hooks/useReferralCode';
 
 const queryClient = new QueryClient();
 
 const App = () => {
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const referralCode = params.get("code");
-    if (referralCode) {
-      localStorage.setItem("referralCode", referralCode);
-    }
-  }, []);
+  const { referralCode, isLoading } = useReferralCode(); // Теперь хук внутри BrowserRouter — работает
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <TooltipProvider>
-          <Toaster />
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/product" element={<Product />} />
-            <Route path="/bind-ttn" element={<BindTTN />} />
-            <Route path="*" element={<NotFound />} />
-            <Route path="/success" element={<Success />} />
-          </Routes>
-        </TooltipProvider>
-      </BrowserRouter>
-    </QueryClientProvider>
+    <TooltipProvider>
+      <Toaster />
+      <Routes>
+        <Route path="/" element={<Index />} />
+        <Route path="/product" element={<Product />} />
+        <Route path="/bind-ttn" element={<BindTTN />} />
+        <Route path="*" element={<NotFound />} />
+        <Route path="/success" element={<Success />} />
+      </Routes>
+    </TooltipProvider>
   );
 };
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={queryClient}>
+    <BrowserRouter> {/* Роутер теперь снаружи App */}
+      <App />
+    </BrowserRouter>
+  </QueryClientProvider>
+);
