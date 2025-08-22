@@ -32,11 +32,8 @@ type OrderRow = {
   referralCode?: string;
   name?: string;
   phone?: string;
-  cashbackPending?: boolean;
-  cashbackPendingAt?: Date | null;
-  cashbackSent?: boolean;
-  cashbackAmount?: number;
   address?: string;
+  cashbacks?: Array<{pending: boolean, pendingAt?: Date | null, sent: boolean, amount?: number, buyerEmail?: string, skipped?: boolean, skippedReason?: string}>;
 };
 
 const CASHBACK_DELAY_MS = 1 * 60 * 1000; // 1 минута для теста; в проде 17 * 24 * 60 * 60 * 1000
@@ -48,7 +45,7 @@ const BindTTN: React.FC = () => {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [refreshingAll, setRefreshingAll] = useState(false);
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [expandedRow, setExpandedRow ] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
   const functions = getFunctions(undefined, "us-central1");
@@ -92,24 +89,28 @@ const BindTTN: React.FC = () => {
         }
       });
 
-      // Добавлено: Получаем referrals
+      // Получаем referrals и їх subcollection cashbacks
       const referralsSnap = await getDocs(collection(db, "referrals"));
-      const referralsByEmail = new Map<string, { createdAt?: Date | null; cashbackPending?: boolean; cashbackPendingAt?: Date | null; cashbackSent?: boolean; cashbackAmount?: number }>();
-      referralsSnap.forEach((d) => {
-        const r = d.data() as any;
-        if (!r?.email) return;
+      const referralsByEmail = new Map<string, { createdAt?: Date | null; cashbacks: Array<any> }>();
+      for (const refDoc of referralsSnap.docs) {
+        const r = refDoc.data() as any;
+        if (!r?.email) continue;
         const current = referralsByEmail.get(r.email);
         const created = toDateSafe(r.createdAt);
-        if (!current || (created && (!current.createdAt || created > current.createdAt))) {
-          referralsByEmail.set(r.email, {
-            createdAt: created,
-            cashbackPending: r.cashbackPending ?? false,
-            cashbackPendingAt: toDateSafe(r.cashbackPendingAt),
-            cashbackSent: r.cashbackSent ?? false,
-            cashbackAmount: r.cashbackAmount || undefined,
-          });
-        }
-      });
+        if (current && created && current.createdAt && created <= current.createdAt) continue; // Беремо найсвіжіший
+
+        // Fetch subcollection
+        const cashbacksSnap = await getDocs(collection(refDoc.ref, "cashbacks"));
+        const cashbacks = cashbacksSnap.docs.map(cb => ({
+          ...cb.data(),
+          pendingAt: toDateSafe(cb.data().pendingAt),
+        }));
+
+        referralsByEmail.set(r.email, {
+          createdAt: created,
+          cashbacks,
+        });
+      }
 
       const rows: OrderRow[] = [];
       ordersSnap.forEach((d) => {
@@ -131,10 +132,7 @@ const BindTTN: React.FC = () => {
           name: data.name || data.metadata?.name || undefined,
           phone: data.phone || data.metadata?.phone || undefined,
           address: data.address || data.metadata?.address || undefined,
-          cashbackPending: referralLink?.cashbackPending,
-          cashbackPendingAt: referralLink?.cashbackPendingAt,
-          cashbackSent: referralLink?.cashbackSent,
-          cashbackAmount: referralLink?.cashbackAmount,
+          cashbacks: referralLink?.cashbacks || [],
         });
       });
 
@@ -161,7 +159,7 @@ const BindTTN: React.FC = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(new Date());
-    }, 1000);
+    }, 1000)
     return () => clearInterval(interval);
   }, []);
 
@@ -310,7 +308,7 @@ const BindTTN: React.FC = () => {
                 </tr>
                 {expandedRow === o.id && (
                   <tr>
-                    <td colSpan={6} className="p-4 bg-gray-50 border-b border-gray-200">
+                    <td colSpan={7} className="p-4 bg-gray-50 border-b border-gray-200">
                       {o.status === "Відправлення отримано" && o.receivedAt ? (
                         <>
                           {(() => {
@@ -339,25 +337,31 @@ const BindTTN: React.FC = () => {
                             }
                           })()}
                           {/* Добавлено: Раздел для кешбека */}
-                          {o.cashbackPending && o.cashbackPendingAt ? (
-                            (() => {
-                              const cashbackDeadline = new Date(o.cashbackPendingAt.getTime() + CASHBACK_DELAY_MS);
-                              const cashbackTimeLeftSeconds = Math.max(0, (cashbackDeadline.getTime() - currentTime.getTime()) / 1000);
-                              if (cashbackTimeLeftSeconds > 0) {
-                                return (
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-700">Залишилося до видачі кешбеку:</p>
-                                    <p className="text-lg font-bold text-primary">{formatTimeLeft(cashbackTimeLeftSeconds)}</p>
-                                  </div>
-                                );
-                              } else if (o.cashbackSent && o.cashbackAmount) {
-                                return (
-                                  <p className="text-sm font-medium text-green-600">✅ Кешбек надіслано: {(o.cashbackAmount / 100).toFixed(2)} USD</p>
-                                );
-                              } else {
-                                return <p className="text-sm text-gray-500">Очікує обробки кешбеку (оновіть сторінку)</p>;
-                              }
-                            })()
+                          {o.cashbacks && o.cashbacks.length > 0 ? (
+                            <div>
+                              <p className="text-sm font-medium text-gray-700">Кешбеки:</p>
+                              {o.cashbacks.map((cb, idx) => (
+                                <div key={idx} className="ml-4 text-sm">
+                                  {cb.pending && cb.pendingAt ? (
+                                    (() => {
+                                      const deadline = new Date(cb.pendingAt.getTime() + CASHBACK_DELAY_MS);
+                                      const timeLeft = Math.max(0, (deadline.getTime() - currentTime.getTime()) / 1000);
+                                      if (timeLeft > 0) {
+                                        return <p>Залишилося для {cb.buyerEmail || 'реферала'}: {formatTimeLeft(timeLeft)}</p>;
+                                      } else if (cb.sent && cb.amount) {
+                                        return <p className="text-green-600">✅ Надіслано для {cb.buyerEmail || 'реферала'}: {(cb.amount / 100).toFixed(2)} UAH</p>;
+                                      } else {
+                                        return <p className="text-gray-500">Очікує для {cb.buyerEmail || 'реферала'}</p>;
+                                      }
+                                    })()
+                                  ) : cb.sent ? (
+                                    <p className="text-green-600">✅ Надіслано для {cb.buyerEmail || 'реферала'}: {(cb.amount / 100).toFixed(2)} UAH</p>
+                                  ) : cb.skipped ? (
+                                    <p className="text-red-500">Пропущено для {cb.buyerEmail || 'реферала'}: {cb.skippedReason}</p>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
                           ) : (
                             <p className="text-sm text-gray-500">Кешбек недоступний (немає рефералів з покупкою)</p>
                           )}
@@ -372,7 +376,7 @@ const BindTTN: React.FC = () => {
             ))}
             {orders.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-4 text-center text-gray-500">
+                <td colSpan={7} className="py-4 text-center text-gray-500">
                   Замовлень не знайдено
                 </td>
               </tr>

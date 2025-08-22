@@ -1,3 +1,4 @@
+// processReferralDue.js
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const sendgrid = require("@sendgrid/mail");
@@ -26,7 +27,7 @@ const sendReferralEmail = async (email, referralCode, appUrl) => {
   }
 };
 
-const REFERRAL_DELAY_MS = 1 * 60 * 1000; // 1 мин для теста; в проде: 17 * 24 * 60 * 60 * 1000 (17 дней)
+const REFERRAL_DELAY_MS = 1 * 60 * 1000; // 1 мин для теста; в проде: 17 * 24 * 60 * 60 * 1000
 
 exports.processReferralDue = onSchedule({
   schedule: "every 1 minutes",
@@ -35,7 +36,7 @@ exports.processReferralDue = onSchedule({
   console.log("📅 processReferralDue started at", new Date().toISOString());
   const ttnCol = admin.firestore().collection("ttns");
   const now = Date.now();
-  const thresholdMillis = now - REFERRAL_DELAY_MS
+  const thresholdMillis = now - REFERRAL_DELAY_MS;
   const thresholdTimestamp = admin.firestore.Timestamp.fromMillis(thresholdMillis);
 
   try {
@@ -65,7 +66,7 @@ exports.processReferralDue = onSchedule({
           email: data.email,
           ttn: d.id,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          cashbackSent: false, // Добавлено
+          cashbacks: [], // Ініціалізуйте масив
         });
 
         await sendReferralEmail(data.email, referralCode, APP_URL.value());
