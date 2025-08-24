@@ -21,6 +21,12 @@ type TTNFormValues = {
   ttn: string;
 };
 
+type BankFormValues = {
+  iban: string;
+  bic?: string;
+  holderName: string;
+};
+
 type OrderRow = {
   id: string;
   email: string;
@@ -33,23 +39,49 @@ type OrderRow = {
   name?: string;
   phone?: string;
   address?: string;
-  cashbacks?: Array<{pending: boolean, pendingAt?: Date | null, sent: boolean, amount?: number, buyerEmail?: string, skipped?: boolean, skippedReason?: string}>;
+  cashbacks?: Array<{
+    pending: boolean;
+    pendingAt?: Date | null;
+    sent: boolean;
+    amount?: number;
+    buyerEmail?: string;
+    skipped?: boolean;
+    skippedReason?: string;
+  }>;
+  bankDetails?: { iban: string; bic?: string; name: string };
 };
 
-const CASHBACK_DELAY_MS = 1 * 60 * 1000; // 1 минута для теста; в проде 17 * 24 * 60 * 60 * 1000
+const REFERRAL_DELAY_MS = 1 * 60 * 1000; // 1 хв для тесту
+const CASHBACK_DELAY_MS = 1 * 60 * 1000; // 1 хв для тесту
 
 const BindTTN: React.FC = () => {
-  const { register, handleSubmit, formState: { errors, isSubmitting }, reset } = useForm<TTNFormValues>();
+  const {
+    register: registerTTN,
+    handleSubmit: handleSubmitTTN,
+    formState: { errors: errorsTTN, isSubmitting: isSubmittingTTN },
+    reset: resetTTN,
+  } = useForm<TTNFormValues>();
   const { toast } = useToast();
 
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [refreshingAll, setRefreshingAll] = useState(false);
-  const [expandedRow, setExpandedRow ] = useState<string | null>(null);
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
   const functions = getFunctions(undefined, "us-central1");
   const refreshShipmentStatus = httpsCallable(functions, "refreshShipmentStatus");
+  const createBankDetailsOnboarding = httpsCallable(
+    functions,
+    "createBankDetailsOnboarding"
+  );
+
+  const {
+    register: registerBank,
+    handleSubmit: handleSubmitBank,
+    formState: { errors: errorsBank, isSubmitting: isSubmittingBank },
+    reset: resetBank,
+  } = useForm<BankFormValues>();
 
   const toDateSafe = (v: any): Date | null => {
     try {
@@ -71,7 +103,17 @@ const BindTTN: React.FC = () => {
 
       const ttnSnap = await getDocs(collection(db, "ttns"));
 
-      const ttnByEmail = new Map<string, { ttn: string; status?: string; createdAt?: Date | null; receivedAt?: Date | null; referralSent?: boolean; referralCode?: string }>();
+      const ttnByEmail = new Map<
+        string,
+        {
+          ttn: string;
+          status?: string;
+          createdAt?: Date | null;
+          receivedAt?: Date | null;
+          referralSent?: boolean;
+          referralCode?: string;
+        }
+      >();
       ttnSnap.forEach((d) => {
         const t = d.data() as any;
         if (!t?.email) return;
@@ -89,19 +131,21 @@ const BindTTN: React.FC = () => {
         }
       });
 
-      // Получаем referrals и їх subcollection cashbacks
+      // referrals + subcollection cashbacks
       const referralsSnap = await getDocs(collection(db, "referrals"));
-      const referralsByEmail = new Map<string, { createdAt?: Date | null; cashbacks: Array<any> }>();
+      const referralsByEmail = new Map<
+        string,
+        { createdAt?: Date | null; cashbacks: Array<any> }
+      >();
       for (const refDoc of referralsSnap.docs) {
         const r = refDoc.data() as any;
         if (!r?.email) continue;
         const current = referralsByEmail.get(r.email);
         const created = toDateSafe(r.createdAt);
-        if (current && created && current.createdAt && created <= current.createdAt) continue; // Беремо найсвіжіший
+        if (current && created && current.createdAt && created <= current.createdAt) continue;
 
-        // Fetch subcollection
         const cashbacksSnap = await getDocs(collection(refDoc.ref, "cashbacks"));
-        const cashbacks = cashbacksSnap.docs.map(cb => ({
+        const cashbacks = cashbacksSnap.docs.map((cb) => ({
           ...cb.data(),
           pendingAt: toDateSafe(cb.data().pendingAt),
         }));
@@ -112,6 +156,16 @@ const BindTTN: React.FC = () => {
         });
       }
 
+      // users → bankDetails
+      const usersSnap = await getDocs(collection(db, "users"));
+      const bankByEmail = new Map<string, { iban: string; bic?: string; name: string }>();
+      usersSnap.forEach((u) => {
+        const data = u.data() as any;
+        if (data?.email && data.bankDetails) {
+          bankByEmail.set(data.email, data.bankDetails);
+        }
+      });
+
       const rows: OrderRow[] = [];
       ordersSnap.forEach((d) => {
         const data = d.data() as any;
@@ -119,6 +173,7 @@ const BindTTN: React.FC = () => {
         const createdAt = toDateSafe(data.createdAt);
         const ttnLink = ttnByEmail.get(email);
         const referralLink = referralsByEmail.get(email);
+        const bankLink = bankByEmail.get(email);
 
         rows.push({
           id: d.id,
@@ -133,6 +188,7 @@ const BindTTN: React.FC = () => {
           phone: data.phone || data.metadata?.phone || undefined,
           address: data.address || data.metadata?.address || undefined,
           cashbacks: referralLink?.cashbacks || [],
+          bankDetails: bankLink,
         });
       });
 
@@ -151,7 +207,7 @@ const BindTTN: React.FC = () => {
 
   useEffect(() => {
     fetchOrders();
-    const autoRefresh = setInterval(fetchOrders, 10000); // Auto-refresh каждые 10 сек
+    const autoRefresh = setInterval(fetchOrders, 10000);
     return () => clearInterval(autoRefresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -159,18 +215,24 @@ const BindTTN: React.FC = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(new Date());
-    }, 1000)
+    }, 1000);
     return () => clearInterval(interval);
   }, []);
 
-  const onSubmit = async (data: TTNFormValues) => {
+  const onSubmitTTN = async (data: TTNFormValues) => {
     try {
-      await setDoc(doc(db, "ttns", data.ttn), {
-        email: data.email,
-        ttn: data.ttn,
-        createdAt: serverTimestamp(),
-        status: "pending",
-      }, { merge: true });
+      await setDoc(
+        doc(db, "ttns", data.ttn),
+        {
+          email: data.email,
+          ttn: data.ttn,
+          createdAt: serverTimestamp(),
+          status: "pending",
+          referralSent: false, // Добавьте это поле
+          receivedAt: null,
+        },
+        { merge: true }
+      );
 
       try {
         await refreshShipmentStatus({ ttn: data.ttn });
@@ -179,13 +241,33 @@ const BindTTN: React.FC = () => {
       }
 
       toast({ title: "✅ Успіх", description: "TTN успішно прив'язано" });
-      reset({ ttn: "", email: data.email });
+      resetTTN({ ttn: "", email: data.email });
       await fetchOrders();
     } catch (err: any) {
       console.error("Error in onSubmit:", err);
       toast({
         title: "❌ Помилка",
         description: err?.message || "Не вдалося прив'язати TTN",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const onSubmitBank = async (data: BankFormValues, email: string) => {
+    try {
+      await createBankDetailsOnboarding({
+        email,
+        iban: data.iban,
+        bic: data.bic || "",
+        name: data.holderName,
+      });
+      toast({ title: "✅ Успіх", description: "Банківські дані збережено" });
+      resetBank();
+      await fetchOrders();
+    } catch (err: any) {
+      toast({
+        title: "❌ Помилка",
+        description: err?.message || "Не вдалося зберегти банківські дані",
         variant: "destructive",
       });
     }
@@ -226,38 +308,42 @@ const BindTTN: React.FC = () => {
 
   return (
     <div className="px-4 py-8 sm:px-6 lg:px-8">
-      {/* Форма */}
+      {/* Форма TTN */}
       <div className="max-w-md mx-auto bg-white rounded-2xl shadow-lg p-6 sm:p-8 border border-gray-200 mb-8">
         <h1 className="text-2xl font-semibold text-center mb-6">Прив'язати номер TTN</h1>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+        <form onSubmit={handleSubmitTTN(onSubmitTTN)} className="space-y-5">
           <div>
             <label className="block mb-1 text-sm font-medium text-gray-700">Email</label>
             <Input
               type="email"
-              {...register("email", { required: "Вкажіть email" })}
+              {...registerTTN("email", { required: "Вкажіть email" })}
               placeholder="example@email.com"
               className="focus-visible:ring-2 focus-visible:ring-primary"
             />
-            {errors.email && <p className="text-sm text-red-500 mt-1">{errors.email.message}</p>}
+            {errorsTTN.email && (
+              <p className="text-sm text-red-500 mt-1">{errorsTTN.email.message}</p>
+            )}
           </div>
 
           <div>
             <label className="block mb-1 text-sm font-medium text-gray-700">Номер TTN</label>
             <Input
               type="text"
-              {...register("ttn", { required: "Вкажіть TTN" })}
+              {...registerTTN("ttn", { required: "Вкажіть TTN" })}
               placeholder="Введіть номер TTN"
               className="focus-visible:ring-2 focus-visible:ring-primary"
             />
-            {errors.ttn && <p className="text-sm text-red-500 mt-1">{errors.ttn.message}</p>}
+            {errorsTTN.ttn && (
+              <p className="text-sm text-red-500 mt-1">{errorsTTN.ttn.message}</p>
+            )}
           </div>
 
           <Button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmittingTTN}
             className="w-full transition-all duration-150 hover:scale-[1.01]"
           >
-            {isSubmitting ? "Обробка..." : "Прив'язати TTN"}
+            {isSubmittingTTN ? "Обробка..." : "Прив'язати TTN"}
           </Button>
         </form>
       </div>
@@ -306,74 +392,203 @@ const BindTTN: React.FC = () => {
                   <td className="py-2 px-4">{o.ttn || "-"}</td>
                   <td className="py-2 px-4">{renderStatus(o.status)}</td>
                 </tr>
+
                 {expandedRow === o.id && (
                   <tr>
                     <td colSpan={7} className="p-4 bg-gray-50 border-b border-gray-200">
-                      {o.status === "Відправлення отримано" && o.receivedAt ? (
+                      {/* Блок: таймер → ссылка */}
+                      {o.receivedAt || o.referralSent ? (
                         <>
                           {(() => {
-                            const deadline = new Date(o.receivedAt.getTime() + 1 * 60 * 1000); // REFERRAL_DELAY_MS
-                            const timeLeftSeconds = Math.max(0, (deadline.getTime() - currentTime.getTime()) / 1000);
-                            if (timeLeftSeconds > 0) {
+                            const deadline = o.receivedAt
+                              ? new Date(o.receivedAt.getTime() + REFERRAL_DELAY_MS)
+                              : null;
+                            const timeLeftSeconds = deadline
+                              ? Math.max(
+                                0,
+                                (deadline.getTime() - currentTime.getTime()) / 1000
+                              )
+                              : 0;
+
+                            if (deadline && timeLeftSeconds > 0 && !o.referralSent) {
                               return (
                                 <div className="mb-4">
-                                  <p className="text-sm font-medium text-gray-700">Залишилося до генерації реферальної посилання:</p>
-                                  <p className="text-lg font-bold text-primary">{formatTimeLeft(timeLeftSeconds)}</p>
+                                  <p className="text-sm font-medium text-gray-700">
+                                    Залишилося до генерації реферальної посилання:
+                                  </p>
+                                  <p className="text-lg font-bold text-primary">
+                                    {formatTimeLeft(timeLeftSeconds)}
+                                  </p>
                                 </div>
                               );
-                            } else if (o.referralSent && o.referralCode) {
+                            }
+
+                            if (o.referralSent && o.referralCode) {
                               const baseUrl = window.location.origin;
                               const referralLink = `${baseUrl}/?code=${o.referralCode}`;
                               return (
                                 <div className="mb-4">
-                                  <p className="text-sm font-medium text-green-600">✅ Посилання сгенеровано та надіслано</p>
-                                  <a href={referralLink} className="text-blue-500 underline" target="_blank" rel="noopener noreferrer">
+                                  <p className="text-sm font-medium text-green-600">
+                                    ✅ Посилання сгенеровано та надіслано
+                                  </p>
+                                  <a
+                                    href={referralLink}
+                                    className="text-blue-500 underline break-all"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
                                     {referralLink}
                                   </a>
                                 </div>
                               );
-                            } else {
-                              return <p className="text-sm text-gray-500 mb-4">Очікує генерації (оновіть сторінку)</p>;
                             }
+
+                            return (
+                              <p className="text-sm text-gray-500 mb-4">
+                                ⏳ Посилання ще генерується… (оновіть сторінку)
+                              </p>
+                            );
                           })()}
-                          {/* Добавлено: Раздел для кешбека */}
-                          {o.cashbacks && o.cashbacks.length > 0 ? (
-                            <div>
-                              <p className="text-sm font-medium text-gray-700">Кешбеки:</p>
-                              {o.cashbacks.map((cb, idx) => (
-                                <div key={idx} className="ml-4 text-sm">
-                                  {cb.pending && cb.pendingAt ? (
-                                    (() => {
-                                      const deadline = new Date(cb.pendingAt.getTime() + CASHBACK_DELAY_MS);
-                                      const timeLeft = Math.max(0, (deadline.getTime() - currentTime.getTime()) / 1000);
-                                      if (timeLeft > 0) {
-                                        return <p>Залишилося для {cb.buyerEmail || 'реферала'}: {formatTimeLeft(timeLeft)}</p>;
-                                      } else if (cb.sent && cb.amount) {
-                                        return <p className="text-green-600">✅ Надіслано для {cb.buyerEmail || 'реферала'}: {(cb.amount / 100).toFixed(2)} UAH</p>;
-                                      } else {
-                                        return <p className="text-gray-500">Очікує для {cb.buyerEmail || 'реферала'}</p>;
-                                      }
-                                    })()
-                                  ) : cb.sent ? (
-                                    <p className="text-green-600">✅ Надіслано для {cb.buyerEmail || 'реферала'}: {(cb.amount / 100).toFixed(2)} UAH</p>
-                                  ) : cb.skipped ? (
-                                    <p className="text-red-500">Пропущено для {cb.buyerEmail || 'реферала'}: {cb.skippedReason}</p>
-                                  ) : null}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-sm text-gray-500">Кешбек недоступний (немає рефералів з покупкою)</p>
-                          )}
                         </>
                       ) : (
-                        <p className="text-sm text-gray-500">Таймер доступний тільки для статусу "Відправлення отримано"</p>
+                        <p className="text-sm text-gray-500">
+                          Таймер доступний після статусу отримання посилки
+                        </p>
                       )}
+
+                      {/* Блок: кешбеки */}
+                      {o.cashbacks && o.cashbacks.length > 0 ? (
+                        <div className="mt-2">
+                          <p className="text-sm font-medium text-gray-700">Кешбеки:</p>
+                          {o.cashbacks.map((cb, idx) => (
+                            <div key={idx} className="ml-4 text-sm">
+                              {cb.pending && cb.pendingAt ? (
+                                (() => {
+                                  const deadline = new Date(
+                                    cb.pendingAt.getTime() + CASHBACK_DELAY_MS
+                                  );
+                                  const timeLeft =
+                                    Math.max(
+                                      0,
+                                      (deadline.getTime() - currentTime.getTime()) / 1000
+                                    ) || 0;
+                                  if (timeLeft > 0) {
+                                    return (
+                                      <p>
+                                        Залишилося для{" "}
+                                        {cb.buyerEmail || "реферала"}:{" "}
+                                        {formatTimeLeft(timeLeft)}
+                                      </p>
+                                    );
+                                  } else if (cb.sent && cb.amount) {
+                                    return (
+                                      <p className="text-green-600">
+                                        ✅ Надіслано для {cb.buyerEmail || "реферала"}:{" "}
+                                        {(cb.amount / 100).toFixed(2)} UAH
+                                      </p>
+                                    );
+                                  } else if (cb.skipped) {
+                                    return (
+                                      <p className="text-red-500">
+                                        Пропущено для {cb.buyerEmail || "реферала"}:{" "}
+                                        {cb.skippedReason || "Невідома причина"}
+                                      </p>
+                                    );
+                                  }
+                                  return (
+                                    <p className="text-gray-500">
+                                      Очікує для {cb.buyerEmail || "реферала"}
+                                    </p>
+                                  );
+                                })()
+                              ) : cb.sent ? (
+                                <p className="text-green-600">
+                                  ✅ Надіслано для {cb.buyerEmail || "реферала"}:{" "}
+                                  {(cb.amount ?? 0 / 100).toFixed(2)} UAH
+                                </p>
+                              ) : cb.skipped ? (
+                                <p className="text-red-500">
+                                  Пропущено для {cb.buyerEmail || "реферала"}:{" "}
+                                  {cb.skippedReason}
+                                </p>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">
+                          Кешбек недоступний (немає рефералів з покупкою)
+                        </p>
+                      )}
+
+                      {/* Блок: банківські дані для виплат – показувати, коли посилання вже надіслано */}
+                      {o.referralSent && !o.bankDetails ? (
+                        <div className="mt-4">
+                          <p className="text-sm font-medium text-gray-700 mb-2">
+                            Введіть банківські дані для виплат (IBAN):
+                          </p>
+                          <form
+                            onSubmit={handleSubmitBank((data) =>
+                              onSubmitBank(data, o.email)
+                            )}
+                            className="space-y-3"
+                          >
+                            <div>
+                              <label className="block mb-1 text-xs font-medium text-gray-700">
+                                IBAN
+                              </label>
+                              <Input
+                                {...registerBank("iban", { required: "Вкажіть IBAN" })}
+                                placeholder="UA..."
+                              />
+                              {errorsBank.iban && (
+                                <p className="text-xs text-red-500">
+                                  {errorsBank.iban.message}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block mb-1 text-xs font-medium text-gray-700">
+                                Ім'я власника
+                              </label>
+                              <Input
+                                {...registerBank("holderName", {
+                                  required: "Вкажіть ім'я",
+                                })}
+                                placeholder="Іван Іванов"
+                              />
+                              {errorsBank.holderName && (
+                                <p className="text-xs text-red-500">
+                                  {errorsBank.holderName.message}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block mb-1 text-xs font-medium text-gray-700">
+                                BIC (опціонально)
+                              </label>
+                              <Input {...registerBank("bic")} placeholder="BIC..." />
+                            </div>
+                            <Button
+                              type="submit"
+                              disabled={isSubmittingBank}
+                              className="w-full text-sm"
+                            >
+                              {isSubmittingBank ? "Збереження..." : "Зберегти банківські дані"}
+                            </Button>
+                          </form>
+                        </div>
+                      ) : o.referralSent && o.bankDetails ? (
+                        <p className="text-sm text-green-600 mt-2">
+                          ✅ Банківські дані збережено (IBAN: {o.bankDetails.iban.slice(-4)})
+                        </p>
+                      ) : null}
                     </td>
                   </tr>
                 )}
               </React.Fragment>
             ))}
+
             {orders.length === 0 && (
               <tr>
                 <td colSpan={7} className="py-4 text-center text-gray-500">

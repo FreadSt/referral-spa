@@ -22,26 +22,36 @@ export const storage = getStorage(app);
 
 const functions = getFunctions(app);
 
-export const createCheckoutSession = httpsCallable(functions, "createCheckoutSession");
+export const initiateCheckout = httpsCallable(functions, "initiateCheckout");
 export const createNovaPoshtaShipment = httpsCallable(functions, "createNovaPoshtaShipment");
 export const processRefund = httpsCallable(functions, "processRefund");
-export const trackNovaPoshta = httpsCallable(functions, "trackNovaPoshta");
+export const trackNovaPoshta = httpsCallable(functions, "trackNovaPoshta"); // Или refreshShipmentStatus, если переименуешь
 
-export async function initiateCheckout(data: any) {
+export async function startCheckout(data: any) {
   if (!auth.currentUser) {
     await signInAnonymously(auth);
   }
   try {
-    const result: any = await createCheckoutSession(data);
-    const url = result?.data?.url;
-    if (!url) throw new Error("Stripe URL not returned");
-    window.location.assign(url);
-    return url;
+    const result: any = await initiateCheckout(data);
+    const formHtml = result?.data?.formHtml;
+    if (!formHtml) throw new Error("LiqPay form not returned");
+
+    // Рендерим форму и сабмитим автоматически
+    const formContainer = document.createElement("div");
+    formContainer.innerHTML = formHtml;
+    document.body.appendChild(formContainer);
+    const form = formContainer.querySelector("form") as HTMLFormElement;
+    if (form) {
+      form.submit();
+    } else {
+      throw new Error("Form not found in HTML");
+    }
+
+    return result.data.orderId;
   } catch (error) {
     console.error("Checkout failed:", error);
     throw error;
   }
 }
-
 
 export default app;
