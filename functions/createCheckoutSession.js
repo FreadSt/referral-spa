@@ -1,4 +1,4 @@
-// createCheckoutSession.js (додане створення connected account)
+// functions/checkouts/createCheckoutSession.js
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
@@ -44,32 +44,7 @@ exports.createCheckoutSession = onCall(
       throw new HttpsError("internal", "Failed to create customer");
     }
 
-    // Додане: Створення connected account (якщо немає)
-    let connectedAccountId;
-    const userRef = admin.firestore().collection("users").doc(uid);
-    const userSnap = await userRef.get();
-    connectedAccountId = userSnap.data()?.connectedAccountId;
-
-    if (!connectedAccountId) {
-      try {
-        const account = await stripeClient.accounts.create({
-          type: 'express', // Для UA; перевірте країни
-          country: 'UA',
-          email: data.customer_email,
-          capabilities: {
-            card_payments: { requested: true },
-            transfers: { requested: true },
-          },
-        });
-        connectedAccountId = account.id;
-        await userRef.update({ connectedAccountId });
-        // Для referral - оновіть при генерації, або тут якщо потрібно
-      } catch (error) {
-        console.error("🔥 Error creating connected account:", error);
-        // Не блокуємо, якщо не критичний
-      }
-    }
-
+    // Метадані (email + рефкод + bank details)
     const metadata = {
       ...data.metadata,
       email: data.customer_email || data.metadata?.email || null,
@@ -80,6 +55,7 @@ exports.createCheckoutSession = onCall(
       console.log("🔗 Adding referral code to session:", data.referralCode);
     }
 
+    // Документ для Stripe Extension
     const sessionRef = admin.firestore().collection(`customers/${uid}/checkout_sessions`).doc();
 
     await sessionRef.set({
@@ -95,6 +71,7 @@ exports.createCheckoutSession = onCall(
       emailError: null,
     });
 
+    // Ждем url от экстеншна
     return new Promise((resolve, reject) => {
       const unsubscribe = sessionRef.onSnapshot((snap) => {
         const sessionData = snap.data();
