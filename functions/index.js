@@ -14,6 +14,8 @@ const runReferralCheck = require('./runReferralCheck');
 const processReferralDue = require('./processReferralDue');
 const cashbackPayment = require('./cashbackPayment');
 const processCashbackDue = require('./processCashbackDue');
+const liqpayWebhook = require('./liqpayWebhook');
+
 
 exports.onPaymentCreated = onPaymentCreated.onPaymentCreated;
 exports.createCheckoutSession = createCheckoutSession.createCheckoutSession;
@@ -27,4 +29,5 @@ exports.runReferralCheck = runReferralCheck.runReferralCheck;
 exports.processReferralDue = processReferralDue.processReferralDue;
 exports.cashbackPayment = cashbackPayment.cashbackPayment;
 exports.processCashbackDue = processCashbackDue.processCashbackDue;
+exports.liqpayWebhook = liqpayWebhook.liqpayWebhook;
 

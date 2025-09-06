@@ -1,3 +1,4 @@
+// functions/referrals/runReferralCheck.js
 const { onCall } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const sendgrid = require("@sendgrid/mail");
@@ -29,17 +30,15 @@ const sendReferralEmail = async (email, referralCode, appUrl) => {
 exports.runReferralCheck = onCall({
   secrets: [SENDGRID_API_KEY, APP_URL],
 }, async (request) => {
-  // request.data: { testSeconds?: number }
   const testSeconds = Number(request.data?.testSeconds) || null;
   const now = Date.now();
-  const thresholdMillis = testSeconds ? now - testSeconds * 1000 : now - 30 * 1000; // Default to 30 seconds
+  const thresholdMillis = testSeconds ? now - testSeconds * 1000 : now - 30 * 1000;
   const thresholdTimestamp = admin.firestore.Timestamp.fromMillis(thresholdMillis);
 
   const ttnCol = admin.firestore().collection("ttns");
   const snap = await ttnCol
-    .where("status", "==", "Відправлення отримано")
-    .where("referralSent", "==", false)
     .where("receivedAt", "<=", thresholdTimestamp)
+    .where("referralSent", "==", false)
     .get();
   if (snap.empty) return { updated: 0, message: "No due received TTNs" };
 
@@ -53,12 +52,27 @@ exports.runReferralCheck = onCall({
   for (const d of snap.docs) {
     const data = d.data();
     try {
+      // Находим referrerUid по email
+      const ordersQuery = await admin.firestore()
+        .collection("orders")
+        .where("email", "==", data.email)
+        .orderBy("createdAt", "desc")
+        .limit(1)
+        .get();
+
+      if (ordersQuery.empty) {
+        console.warn("⚠️ No order found for email:", data.email);
+        continue;
+      }
+
+      const referrerUid = ordersQuery.docs[0].data().userId;
+
       const referralCode = generateReferralCode();
       await admin.firestore().collection("referrals").doc(referralCode).set({
         email: data.email,
         ttn: d.id,
+        referrerUid,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        cashbackSent: false, // Добавлено
       });
 
       await sendReferralEmail(data.email, referralCode, APP_URL.value());

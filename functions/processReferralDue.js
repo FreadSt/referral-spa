@@ -1,3 +1,4 @@
+// functions/referrals/processReferralDue.js
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const sendgrid = require("@sendgrid/mail");
@@ -26,7 +27,7 @@ const sendReferralEmail = async (email, referralCode, appUrl) => {
   }
 };
 
-const REFERRAL_DELAY_MS = 1 * 60 * 1000; // 1 мин для теста; в проде: 17 * 24 * 60 * 60 * 1000 (17 дней)
+const REFERRAL_DELAY_MS = 17 * 24 * 60 * 60 * 1000; // 1 мин для теста; в проде: 17 * 24 * 60 * 60 * 1000 (17 дней)
 
 exports.processReferralDue = onSchedule({
   schedule: "every 1 minutes",
@@ -35,14 +36,13 @@ exports.processReferralDue = onSchedule({
   console.log("📅 processReferralDue started at", new Date().toISOString());
   const ttnCol = admin.firestore().collection("ttns");
   const now = Date.now();
-  const thresholdMillis = now - REFERRAL_DELAY_MS
+  const thresholdMillis = now - REFERRAL_DELAY_MS;
   const thresholdTimestamp = admin.firestore.Timestamp.fromMillis(thresholdMillis);
 
   try {
     const snap = await ttnCol
-      .where("status", "==", "Відправлення отримано")
-      .where("referralSent", "==", false)
       .where("receivedAt", "<=", thresholdTimestamp)
+      .where("referralSent", "==", false)
       .get();
     console.log("🔍 Found", snap.size, "eligible TTNs");
 
@@ -60,12 +60,27 @@ exports.processReferralDue = onSchedule({
       const data = d.data();
       console.log("📦 Processing TTN:", d.id, "receivedAt:", data.receivedAt?.toDate());
       try {
+        // Находим referrerUid по email (предполагаем уникальность email; возьмем последний order)
+        const ordersQuery = await admin.firestore()
+          .collection("orders")
+          .where("email", "==", data.email)
+          .orderBy("createdAt", "desc")
+          .limit(1)
+          .get();
+
+        if (ordersQuery.empty) {
+          console.warn("⚠️ No order found for email:", data.email);
+          continue;
+        }
+
+        const referrerUid = ordersQuery.docs[0].data().userId;
+
         const referralCode = generateReferralCode();
         await admin.firestore().collection("referrals").doc(referralCode).set({
           email: data.email,
           ttn: d.id,
+          referrerUid,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          cashbackSent: false, // Добавлено
         });
 
         await sendReferralEmail(data.email, referralCode, APP_URL.value());
@@ -82,7 +97,6 @@ exports.processReferralDue = onSchedule({
       }
     }
     console.log("✅ Processed", sent, "referrals");
-    return { sent };
   } catch (e) {
     console.error("🔥 Query or processing error:", e);
   }

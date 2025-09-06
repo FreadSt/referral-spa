@@ -1,6 +1,8 @@
-const { onCall } = require("firebase-functions/v2/https");
+// functions/shipments/createNovaPoshtaShipment.js
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const axios = require("axios");
+const sendgrid = require("@sendgrid/mail");
 const { defineSecret } = require("firebase-functions/params");
 
 const NOVAPOSHTA_KEY = defineSecret("NOVAPOSHTA_KEY");
@@ -27,16 +29,19 @@ const sendOrderConfirmationEmail = async (email, name, phone, address, ttn) => {
 
 exports.createNovaPoshtaShipment = onCall({
   secrets: [NOVAPOSHTA_KEY, SENDGRID_API_KEY],
-}, async (data, context) => {
-  if (!context.auth) {
-    throw new Error("Unauthenticated");
+}, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Unauthenticated");
   }
 
-  const { email, name, phone, address } = data.data || {};
+  const { email, name, phone, address } = request.data || {};
 
   if (!email || !name || !phone || !address) {
-    throw new Error("Missing required fields");
+    throw new HttpsError("invalid-argument", "Missing required fields");
   }
+
+  const sgKey = SENDGRID_API_KEY.value();
+  if (sgKey) sendgrid.setApiKey(sgKey);
 
   try {
     const response = await axios.post("https://api.novaposhta.ua/v2.0/json/", {
@@ -64,7 +69,7 @@ exports.createNovaPoshtaShipment = onCall({
       ttn,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       status: "pending",
-      userId: context.auth.uid,
+      userId: request.auth.uid,
     });
 
     await sendOrderConfirmationEmail(email, name, phone, address, ttn);
@@ -72,6 +77,6 @@ exports.createNovaPoshtaShipment = onCall({
     return { ttn };
   } catch (error) {
     console.error("🔥 NovaPoshta error:", error?.response?.data || error);
-    throw new Error("Failed to create shipment");
+    throw new HttpsError("internal", "Failed to create shipment");
   }
 });

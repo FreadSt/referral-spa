@@ -12,6 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import img1 from "../assets/images/image1.JPG";
 import Header from "@/components/Header";
+import Footer from "@/components/Footer";
+
 
 export default function Index() {
   const navigate = useNavigate();
@@ -53,13 +55,13 @@ export default function Index() {
                   Придбати
                   <ChevronRight className="ml-2 h-4 w-4" />
                 </Button>
-                <Button
-                  variant="outline"
-                  size="lg"
-                  className="border-brand-navy text-brand-navy hover:bg-brand-navy hover:text-white"
-                >
-                  Вся коллекція
-                </Button>
+                {/*<Button*/}
+                {/*  variant="outline"*/}
+                {/*  size="lg"*/}
+                {/*  className="border-brand-navy text-brand-navy hover:bg-brand-navy hover:text-white"*/}
+                {/*>*/}
+                {/*  Вся коллекція*/}
+                {/*</Button>*/}
               </div>
             </div>
             <div className="relative">
@@ -79,109 +81,7 @@ export default function Index() {
       </section>
 
       {/* Footer */}
-      <footer className="bg-brand-gray-900 text-white py-9">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div>
-              <h3 className="text-xl font-bold mb-4 text-brand-orange">
-                SolePeak
-              </h3>
-              <p className="text-brand-gray-400 mb-4">
-                Ваше найкраще місце для придбання преміального взуття від провідних світових брендів.
-              </p>
-              <div className="flex space-x-4">
-                <a
-                  href="#"
-                  className="text-brand-gray-400 hover:text-brand-orange transition-colors"
-                >
-                  <Facebook className="h-5 w-5" />
-                </a>
-                <a
-                  href="#"
-                  className="text-brand-gray-400 hover:text-brand-orange transition-colors"
-                >
-                  <Instagram className="h-5 w-5" />
-                </a>
-                <a
-                  href="#"
-                  className="text-brand-gray-400 hover:text-brand-orange transition-colors"
-                >
-                  <Twitter className="h-5 w-5" />
-                </a>
-              </div>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-4">Підтримка</h4>
-              <ul className="space-y-2 text-brand-gray-400">
-                <li>
-                  <Link
-                    to="/contact"
-                    className="hover:text-white transition-colors"
-                  >
-                    Звʼяжіться з нами
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/shipping"
-                    className="hover:text-white transition-colors"
-                  >
-                    Доставка
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/returns"
-                    className="hover:text-white transition-colors"
-                  >
-                    Повернення
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/faq"
-                    className="hover:text-white transition-colors"
-                  >
-                    FAQ
-                  </Link>
-                </li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-4">Компанія</h4>
-              <ul className="space-y-2 text-brand-gray-400">
-                <li>
-                  <Link
-                    to="/about"
-                    className="hover:text-white transition-colors"
-                  >
-                    Про нас
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/privacy"
-                    className="hover:text-white transition-colors"
-                  >
-                    Політика конфіденційності
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/terms"
-                    className="hover:text-white transition-colors"
-                  >
-                    Правила користування
-                  </Link>
-                </li>
-              </ul>
-            </div>
-          </div>
-          <div className="border-t border-brand-gray-700 mt-8 pt-8 text-center text-brand-gray-400">
-            <p>&copy; 2025 SolePeak. All парава захищені.</p>
-          </div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

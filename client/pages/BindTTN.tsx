@@ -1,3 +1,4 @@
+// web/src/components/BindTTN.tsx
 import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useToast } from "@/hooks/use-toast";
@@ -13,6 +14,7 @@ import {
   orderBy,
   limit,
   serverTimestamp,
+  collectionGroup,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
@@ -92,24 +94,50 @@ const BindTTN: React.FC = () => {
         }
       });
 
-      // Добавлено: Получаем referrals
+      // Получаем referrals
       const referralsSnap = await getDocs(collection(db, "referrals"));
-      const referralsByEmail = new Map<string, { createdAt?: Date | null; cashbackPending?: boolean; cashbackPendingAt?: Date | null; cashbackSent?: boolean; cashbackAmount?: number }>();
-      referralsSnap.forEach((d) => {
-        const r = d.data() as any;
-        if (!r?.email) return;
-        const current = referralsByEmail.get(r.email);
-        const created = toDateSafe(r.createdAt);
-        if (!current || (created && (!current.createdAt || created > current.createdAt))) {
-          referralsByEmail.set(r.email, {
-            createdAt: created,
-            cashbackPending: r.cashbackPending ?? false,
-            cashbackPendingAt: toDateSafe(r.cashbackPendingAt),
-            cashbackSent: r.cashbackSent ?? false,
-            cashbackAmount: r.cashbackAmount || undefined,
+
+      // Аггрегаты кешбека по email (из подколлекций pendingCashbacks)
+      const cashbackAggregatesByEmail = new Map<string, {
+        pendingCount: number;
+        earliestPendingAt: Date | null;
+        sentAmount: number;
+      }>();
+
+      await Promise.all(referralsSnap.docs.map(async (referralDoc) => {
+        const referral = referralDoc.data();
+        const email = referral.email;
+        if (!email) return;
+
+        const pendingCashbacksSnap = await getDocs(collection(db, `referrals/${referralDoc.id}/pendingCashbacks`));
+
+        let pendingCount = 0;
+        let earliestPendingAt: Date | null = null;
+        let sentAmount = 0;
+
+        pendingCashbacksSnap.forEach((p) => {
+          const data = p.data();
+          if (data.cashbackPending) {
+            pendingCount++;
+            const at = toDateSafe(data.cashbackPendingAt);
+            if (at && (!earliestPendingAt || at < earliestPendingAt)) {
+              earliestPendingAt = at;
+            }
+          }
+          if (data.cashbackSent) {
+            sentAmount += data.cashbackAmount || 0;
+          }
+        });
+
+        if (pendingCount > 0 || sentAmount > 0) {
+          const currentAgg = cashbackAggregatesByEmail.get(email) || { pendingCount: 0, earliestPendingAt: null, sentAmount: 0 };
+          cashbackAggregatesByEmail.set(email, {
+            pendingCount: currentAgg.pendingCount + pendingCount,
+            earliestPendingAt: earliestPendingAt && (!currentAgg.earliestPendingAt || earliestPendingAt < currentAgg.earliestPendingAt) ? earliestPendingAt : currentAgg.earliestPendingAt,
+            sentAmount: currentAgg.sentAmount + sentAmount,
           });
         }
-      });
+      }));
 
       const rows: OrderRow[] = [];
       ordersSnap.forEach((d) => {
@@ -117,7 +145,7 @@ const BindTTN: React.FC = () => {
         const email = data.email || "";
         const createdAt = toDateSafe(data.createdAt);
         const ttnLink = ttnByEmail.get(email);
-        const referralLink = referralsByEmail.get(email);
+        const cashbackAgg = cashbackAggregatesByEmail.get(email);
 
         rows.push({
           id: d.id,
@@ -131,10 +159,10 @@ const BindTTN: React.FC = () => {
           name: data.name || data.metadata?.name || undefined,
           phone: data.phone || data.metadata?.phone || undefined,
           address: data.address || data.metadata?.address || undefined,
-          cashbackPending: referralLink?.cashbackPending,
-          cashbackPendingAt: referralLink?.cashbackPendingAt,
-          cashbackSent: referralLink?.cashbackSent,
-          cashbackAmount: referralLink?.cashbackAmount,
+          cashbackPending: (cashbackAgg?.pendingCount ?? 0) > 0,
+          cashbackPendingAt: cashbackAgg?.earliestPendingAt,
+          cashbackSent: (cashbackAgg?.sentAmount ?? 0) > 0,
+          cashbackAmount: cashbackAgg?.sentAmount,
         });
       });
 
@@ -310,8 +338,8 @@ const BindTTN: React.FC = () => {
                 </tr>
                 {expandedRow === o.id && (
                   <tr>
-                    <td colSpan={6} className="p-4 bg-gray-50 border-b border-gray-200">
-                      {o.status === "Відправлення отримано" && o.receivedAt ? (
+                    <td colSpan={7} className="p-4 bg-gray-50 border-b border-gray-200">
+                      {o.status?.toLowerCase().includes("отриман") && o.receivedAt ? (
                         <>
                           {(() => {
                             const deadline = new Date(o.receivedAt.getTime() + 1 * 60 * 1000); // REFERRAL_DELAY_MS
@@ -338,7 +366,7 @@ const BindTTN: React.FC = () => {
                               return <p className="text-sm text-gray-500 mb-4">Очікує генерації (оновіть сторінку)</p>;
                             }
                           })()}
-                          {/* Добавлено: Раздел для кешбека */}
+                          {/* Раздел для кешбека */}
                           {o.cashbackPending && o.cashbackPendingAt ? (
                             (() => {
                               const cashbackDeadline = new Date(o.cashbackPendingAt.getTime() + CASHBACK_DELAY_MS);
@@ -352,7 +380,7 @@ const BindTTN: React.FC = () => {
                                 );
                               } else if (o.cashbackSent && o.cashbackAmount) {
                                 return (
-                                  <p className="text-sm font-medium text-green-600">✅ Кешбек надіслано: {(o.cashbackAmount / 100).toFixed(2)} USD</p>
+                                  <p className="text-sm font-medium text-green-600">✅ Кешбек надіслано: {(o.cashbackAmount / 100).toFixed(2)} ₴</p>
                                 );
                               } else {
                                 return <p className="text-sm text-gray-500">Очікує обробки кешбеку (оновіть сторінку)</p>;
@@ -372,7 +400,7 @@ const BindTTN: React.FC = () => {
             ))}
             {orders.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-4 text-center text-gray-500">
+                <td colSpan={7} className="py-4 text-center text-gray-500">
                   Замовлень не знайдено
                 </td>
               </tr>

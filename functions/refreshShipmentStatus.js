@@ -1,3 +1,4 @@
+// functions/shipments/refreshShipmentStatus.js
 const { onCall } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const axios = require("axios");
@@ -48,7 +49,6 @@ exports.refreshShipmentStatus = onCall({
         const id = row?.Number || row?.IntDocNumber;
         if (!id) continue;
 
-        // Update base status and lastCheckedAt
         await ttnCol.doc(id).set(
           {
             status,
@@ -57,7 +57,6 @@ exports.refreshShipmentStatus = onCall({
           { merge: true }
         );
 
-        // If now received — set receivedAt (only once) and ensure referralSent:false
         const receivedNormalized = status.toLowerCase().includes("отриман") || status.toLowerCase().includes("received") || status.toLowerCase().includes("delivered");
         if (receivedNormalized) {
           const snap = await ttnCol.doc(id).get();
@@ -69,7 +68,6 @@ exports.refreshShipmentStatus = onCall({
             }, { merge: true });
           }
         } else {
-          // If status moved away from 'received' and referral not sent yet — remove receivedAt (cancel countdown)
           const snap = await ttnCol.doc(id).get();
           const docData = snap.exists ? snap.data() : {};
           if (docData?.receivedAt && !docData?.referralSent) {

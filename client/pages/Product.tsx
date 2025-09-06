@@ -13,13 +13,13 @@ const product = {
   id: 1,
   name: "Nike Air Max 270",
   brand: "Nike",
-  price: 5,
-  originalPrice: 7,
-  discount: 17,
+  price: 1500,
+  originalPrice: 2200,
+  discount: 30,
   rating: 4.8,
   reviews: 234,
   description:
-    "The Nike Air Max 270 delivers unrivaled all-day comfort with a sleek, running-inspired design. An Air Max unit in the heel provides lightweight cushioning, while the breathable mesh upper keeps your feet cool and comfortable.",
+    "Шльопки замшеві. Виконані із натуральної шкіри та замші. Ідеальні для повсякденного використання, та проведення зустрічей.",
   features: [
     "Max Air unit in the heel for lightweight cushioning",
     "Breathable mesh upper for enhanced airflow",
@@ -68,7 +68,7 @@ export default function Product() {
 
   const handleBuyNow = () => {
     if (!selectedSize) {
-      alert("Please select a size");
+      alert("Необхідно зазначити розмір");
       return;
     }
     setOrderModalOpen(true);
@@ -124,14 +124,18 @@ export default function Product() {
                 {product.name}
               </h1>
 
+              <span className="text-1xl font-light text-gray-400">
+                  {product.description}
+              </span>
+
               {/* Price */}
-              <div className="flex items-center gap-3 mb-6">
+              <div className="flex items-center gap-3 my-6">
                 <span className="text-3xl font-bold text-brand-navy">
-                  ${product.price}
+                  {product.price} UAH
                 </span>
                 {product.originalPrice && (
                   <span className="text-lg text-gray-500 line-through">
-                    ${product.originalPrice}
+                    {product.originalPrice} UAH
                   </span>
                 )}
               </div>
@@ -140,7 +144,7 @@ export default function Product() {
             {/* Size Selection */}
             <div>
               <h3 className="text-lg font-semibold text-brand-navy mb-3">
-                Size
+                Розмір
               </h3>
               <div className="grid grid-cols-6 gap-2">
                 {product.sizes.map((size) => (
@@ -167,7 +171,7 @@ export default function Product() {
             {/* Quantity */}
             <div>
               <h3 className="text-lg font-semibold text-brand-navy mb-3">
-                Quantity
+                Кількість
               </h3>
               <div className="flex items-center border border-gray-200 rounded-lg w-fit">
                 <button
@@ -187,6 +191,17 @@ export default function Product() {
             </div>
 
             <div className="space-y-4">
+              <p className="text-sm text-gray-500">
+                <span className="font-semibold text-red-600">Важливо!</span> Натискаючи кнопку{" "}
+                <span className="font-medium">«Купити»</span>, ви погоджуєтесь з{" "}
+                <a
+                  href="/terms"
+                  className="text-brand-orange hover:underline"
+                >
+                  Правилами користування
+                </a>
+                .
+              </p>
               <Button
                 size="lg"
                 className="bg-brand-orange hover:bg-brand-orange-dark text-white px-8"
@@ -201,7 +216,11 @@ export default function Product() {
       <OrderModal
         open={orderModalOpen}
         onOpenChange={setOrderModalOpen}
-        product={{ name: product.name, price: product.price, stripePriceId: product.stripePriceId }} // Добавляем stripePriceId
+        product={{
+          name: product.name,
+          price: product.price,
+          stripePriceId: product.stripePriceId,
+        }} // Добавляем stripePriceId
         referralCode={referralCode}
       />
       {showLoginPrompt && (

@@ -1,6 +1,8 @@
+// functions/referrals/sendReferralLinks.js
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const { defineSecret } = require("firebase-functions/params");
+const sendgrid = require("@sendgrid/mail");
 
 const APP_URL = defineSecret("APP_URL");
 const SENDGRID_API_KEY = defineSecret("SENDGRID_API_KEY");
@@ -29,14 +31,17 @@ exports.sendReferralLinks = onSchedule({
   schedule: "every 24 hours",
   secrets: [APP_URL, SENDGRID_API_KEY],
 }, async () => {
-  const dateLimit = new Date();
-  dateLimit.setDate(dateLimit.getDate() - 17);
+  const sgKey = SENDGRID_API_KEY.value();
+  if (sgKey) sendgrid.setApiKey(sgKey);
+
+  const thresholdMillis = Date.now() - (17 * 24 * 60 * 60 * 1000); // 17 days
+  const thresholdTimestamp = admin.firestore.Timestamp.fromMillis(thresholdMillis);
 
   const snapshot = await admin
     .firestore()
     .collection("ttns")
-    .where("status", "==", "delivered")
-    .where("deliveredAt", "<=", dateLimit)
+    .where("receivedAt", "<=", thresholdTimestamp)
+    .where("referralSent", "==", false)
     .get();
 
   for (const doc of snapshot.docs) {
@@ -51,9 +56,8 @@ exports.sendReferralLinks = onSchedule({
         ttn: ttnData.ttn,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         cashbackPending: true,
-        cashbackPendingAt: admin.firestore.FieldValue.serverTimestamp(), // отметка времени, когда стартует отсчёт
+        cashbackPendingAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-
 
       await sendReferralEmail(ttnData.email, referralCode, APP_URL.value());
 

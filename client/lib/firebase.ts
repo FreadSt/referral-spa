@@ -33,10 +33,11 @@ export async function initiateCheckout(data: any) {
   }
   try {
     const result: any = await createCheckoutSession(data);
-    const url = result?.data?.url;
-    if (!url) throw new Error("Stripe URL not returned");
-    window.location.assign(url);
-    return url;
+    const { data: liqpayData, signature, liqpay_url } = result?.data;
+    if (!liqpayData || !signature || !liqpay_url) {
+      throw new Error("LiqPay parameters not returned");
+    }
+    return { liqpayData, signature, liqpay_url };
   } catch (error) {
     console.error("Checkout failed:", error);
     throw error;

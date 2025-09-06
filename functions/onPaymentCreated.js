@@ -3,30 +3,21 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const sendgrid = require("@sendgrid/mail");
-const stripeLib = require("stripe");
 
-// Инициализация Admin SDK (без дубликатов)
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-// Секреты
 const SENDGRID_API_KEY = defineSecret("SENDGRID_API_KEY");
-const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
-// ОБЯЗАТЕЛЬНО: установи это на адрес с твоего домена, верифицированного в SendGrid.
-// Пример: noreply@yourdomain.com (НЕ gmail.com!)
-const MAIL_FROM = defineSecret("MAIL_FROM"); // например, noreply@myshop.ua
+const MAIL_FROM = defineSecret("MAIL_FROM");
 
 const isPaymentSucceeded = (data) => data && data.status === "succeeded";
 
-// Простая маскировка email, чтобы почтовики не вырезали адрес из тела письма
 const obfuscateEmail = (e) => {
   if (!e || typeof e !== "string") return "Не указан";
-  // Превращаем user@example.com -> user [at] example [dot] com
   return e.replace(/@/g, " [at] ").replace(/\./g, " [dot] ");
 };
 
-// Лог: ограничим шум
 const maybeLogPaymentDebug = async ({ uid, paymentId, paymentData }) => {
   try {
     const ref = admin.firestore().doc("debug/paymentLogs");
@@ -58,73 +49,10 @@ const maybeLogPaymentDebug = async ({ uid, paymentId, paymentData }) => {
   }
 };
 
-// Достаём контактные поля с приоритетом metadata → session → customer → charge
-const extractCustomerFields = async ({ stripeClient, paymentIntent, checkoutSession }) => {
-  let customer = null;
-  if (paymentIntent?.customer) {
-    try {
-      customer = await stripeClient.customers.retrieve(paymentIntent.customer);
-    } catch (_) {}
-  }
-
-  const latestCharge =
-    paymentIntent?.latest_charge && typeof paymentIntent.latest_charge === "object"
-      ? paymentIntent.latest_charge
-      : null;
-  const charge = latestCharge || paymentIntent?.charges?.data?.[0] || null;
-
-  // E-mail: ставим приоритет на metadata (мы туда клали с клиента)
-  const email =
-    paymentIntent?.metadata?.email ||
-    checkoutSession?.metadata?.email ||
-    customer?.email ||
-    checkoutSession?.customer_details?.email ||
-    checkoutSession?.customer_email ||
-    charge?.billing_details?.email ||
-    null;
-
-  const name =
-    paymentIntent?.metadata?.name ||
-    checkoutSession?.metadata?.name ||
-    customer?.name ||
-    checkoutSession?.customer_details?.name ||
-    charge?.billing_details?.name ||
-    "Не указано";
-
-  const phone =
-    paymentIntent?.metadata?.phone ||
-    checkoutSession?.metadata?.phone ||
-    customer?.phone ||
-    checkoutSession?.customer_details?.phone ||
-    charge?.billing_details?.phone ||
-    "Не указан";
-
-  // Адрес: line1 достаточно для наших нужд
-  const address =
-    paymentIntent?.metadata?.address ||
-    checkoutSession?.metadata?.address ||
-    customer?.address?.line1 ||
-    checkoutSession?.customer_details?.address?.line1 ||
-    charge?.billing_details?.address?.line1 ||
-    "Не указан";
-
-  // Для отладки источника email
-  let emailSource = "unknown";
-  if (paymentIntent?.metadata?.email) emailSource = "paymentIntent.metadata.email";
-  else if (checkoutSession?.metadata?.email) emailSource = "checkoutSession.metadata.email";
-  else if (customer?.email) emailSource = "customer.email";
-  else if (checkoutSession?.customer_details?.email) emailSource = "checkoutSession.customer_details.email";
-  else if (checkoutSession?.customer_email) emailSource = "checkoutSession.customer_email";
-  else if (charge?.billing_details?.email) emailSource = "charge.billing_details.email";
-  console.log(`📧 Email source: ${emailSource}; value: ${email || "null"}`);
-
-  return { email, name, phone, address };
-};
-
 exports.onPaymentCreated = onDocumentCreated(
   {
     document: "customers/{uid}/payments/{paymentId}",
-    secrets: [SENDGRID_API_KEY, STRIPE_SECRET_KEY, MAIL_FROM],
+    secrets: [SENDGRID_API_KEY, MAIL_FROM],
   },
   async (event) => {
     try {
@@ -139,7 +67,6 @@ exports.onPaymentCreated = onDocumentCreated(
         return;
       }
 
-      // Идемпотентность
       const shouldProcess = await admin.firestore().runTransaction(async (tx) => {
         const snap = await tx.get(ref);
         const docData = snap.data() || {};
@@ -153,41 +80,13 @@ exports.onPaymentCreated = onDocumentCreated(
       });
       if (!shouldProcess) return;
 
-      const stripeClient = stripeLib(STRIPE_SECRET_KEY.value());
-
-      // Тянем PaymentIntent
-      let paymentIntent;
-      try {
-        paymentIntent = await stripeClient.paymentIntents.retrieve(paymentId, {
-          expand: ["latest_charge", "charges.data", "customer"],
-        });
-      } catch (err) {
-        console.error("🔥 Stripe PI retrieve error:", err?.message || err);
-        await ref.update({
-          emailSending: false,
-          emailError: `Stripe PI retrieve error: ${err?.message || err}`,
-          lastEmailAttempt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        return;
-      }
-
-      // Пробуем притянуть Checkout Session (если его id записала экстеншн)
-      const sessionId = data.sessionId || data.checkoutSessionId || null;
-      let checkoutSession = null;
-      if (sessionId) {
-        try {
-          checkoutSession = await stripeClient.checkout.sessions.retrieve(sessionId);
-        } catch (err) {
-          console.warn("⚠️ Could not retrieve Checkout Session:", err?.message || err);
-        }
-      }
-
-      // Контакты
-      const { email, name, phone, address } = await extractCustomerFields({
-        stripeClient,
-        paymentIntent,
-        checkoutSession,
-      });
+      // Extract from metadata (set by webhook)
+      const metadata = data.metadata || {};
+      const email = metadata.email || null;
+      const name = metadata.name || "Не указано";
+      const phone = metadata.phone || "Не указан";
+      const address = metadata.address || "Не указан";
+      const cashback_card = metadata.cashback_card || null;
 
       if (!email) {
         console.error("🔥 No customer email found for payment:", paymentId);
@@ -199,10 +98,10 @@ exports.onPaymentCreated = onDocumentCreated(
         return;
       }
 
-      // Сумма
-      const amountCents = paymentIntent?.amount_received ?? paymentIntent?.amount ?? data?.presentation_amount ?? 0;
+      // Amount
+      const amountCents = data.presentation_amount ?? 0;
       const amount = (amountCents / 100).toFixed(2);
-      const currency = (paymentIntent?.currency || data?.presentation_currency || "uah").toUpperCase();
+      const currency = (data.presentation_currency || "uah").toUpperCase();
 
       // SendGrid
       const sgKey = SENDGRID_API_KEY.value();
@@ -213,14 +112,12 @@ exports.onPaymentCreated = onDocumentCreated(
       sendgrid.setApiKey(sgKey);
 
       const fromEmail = MAIL_FROM.value() || "no-reply@invalid.local";
-      // Подскажем в логах, если оставили gmail.com (это вызывает dmarc=fail)
       if (/@gmail\.com$/i.test(fromEmail)) {
         console.warn(
           "⚠️ MAIL_FROM использует gmail.com — это вызовет DMARC fail и спам. Задай почту своего домена, верифицированного в SendGrid!"
         );
       }
 
-      // Письмо владельцу (с reply_to на клиента и маскировкой email в теле)
       const ownerHtml = `
         <h2>Новый заказ</h2>
         <p><b>Имя:</b> ${name}</p>
@@ -230,7 +127,6 @@ exports.onPaymentCreated = onDocumentCreated(
         <p><b>Email клиента:</b> ${obfuscateEmail(email)}</p>
       `;
 
-      // Письмо клиенту
       const customerHtml = `
         <h2>Спасибо за заказ!</h2>
         <p>Мы получили вашу оплату на сумму <b>${amount} ${currency}</b>.</p>
@@ -242,7 +138,6 @@ exports.onPaymentCreated = onDocumentCreated(
       `;
 
       try {
-        // Владельцу
         await sendgrid.send({
           to: email,
           from: fromEmail,
@@ -251,13 +146,11 @@ exports.onPaymentCreated = onDocumentCreated(
           replyTo: { email },
         });
 
-        // Клиенту
         await sendgrid.send({
           to: email,
           from: fromEmail,
           subject: "Спасибо за заказ!",
           html: customerHtml,
-          // Ответы клиента прилетят тебе
           replyTo: { email: "support@" + (fromEmail.split("@")[1] || "example.com") },
         });
       } catch (sgError) {
@@ -270,7 +163,7 @@ exports.onPaymentCreated = onDocumentCreated(
         return;
       }
 
-      // Сохраняем заказ
+      // Save order
       try {
         const orderRef = admin.firestore().collection("orders").doc(paymentId);
         const orderData = {
@@ -284,7 +177,7 @@ exports.onPaymentCreated = onDocumentCreated(
           name,
           phone,
           address,
-          stripeCustomerId: paymentIntent?.customer || data?.customer || null,
+          cashback_card,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 

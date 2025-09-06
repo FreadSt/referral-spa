@@ -1,58 +1,59 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
-const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
-const stripeLib = require("stripe");
+const sendgrid = require("@sendgrid/mail");
+const { defineSecret } = require("firebase-functions/params");
 
-// Инициализация Admin SDK (без дубликатов)
+const SENDGRID_API_KEY = defineSecret("SENDGRID_API_KEY");
+const MAIL_FROM = defineSecret("MAIL_FROM");
+
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
+const sendReferralOrderNotification = async (referrerEmail, buyerEmail) => {
+  try {
+    const msg = {
+      to: referrerEmail,
+      from: MAIL_FROM.value() || "no-reply@yourdomain.com",
+      subject: "🎉 Новый заказ от вашего реферала!",
+      html: `
+        <h2>Поздравляем!</h2>
+        <p>Ваш реферал (${buyerEmail}) только что оформил заказ по вашей ссылке.</p>
+        <p>После получения посылки и истечения периода возврата вы получите кешбек.</p>
+      `,
+    };
+    await sendgrid.send(msg);
+  } catch (error) {
+    console.error("🔥 Referral order notification email error:", error?.response?.body || error);
+  }
+};
 
 exports.cashbackPayment = onDocumentCreated({
   document: "customers/{uid}/payments/{paymentId}",
-  secrets: [STRIPE_SECRET_KEY],
+  secrets: [SENDGRID_API_KEY, MAIL_FROM],
 }, async (event) => {
   const payment = event.data.data();
   if (!payment) return;
 
   console.log("💳 Processing payment for cashback:", event.params.paymentId);
 
-  // Проверяем, что это успешный payment (учитываем структуру от Run Payments Extension)
-  if (payment.status !== "succeeded" && payment.payment_status !== "paid") {
+  if (payment.status !== "succeeded") {
     console.log("⏭️ Skipping: not a successful payment");
     return;
   }
 
-  // Проверяем, что кешбек еще не обработан
   if (payment.cashbackProcessed) {
     console.log("ℹ️ Cashback already processed for payment:", event.params.paymentId);
     return;
   }
 
-  // Получаем Stripe client
-  const stripe = stripeLib(STRIPE_SECRET_KEY.value());
-
-  // Получаем PaymentIntent для доступа к metadata
-  let paymentIntent;
-  try {
-    paymentIntent = await stripe.paymentIntents.retrieve(event.params.paymentId, {
-      expand: ["latest_charge"]
-    });
-  } catch (error) {
-    console.error("🔥 Failed to retrieve PaymentIntent:", error);
-    return;
-  }
-
-  const metadata = paymentIntent.metadata || {};
+  const metadata = payment.metadata || {};
   const email = metadata.email;
   if (!email) {
     console.log("ℹ️ No email in payment metadata");
     return;
   }
 
-  // Обработка реферала и кешбека
   const referralCode = metadata.referralCode;
   if (!referralCode) {
     console.log("ℹ️ No referral code in metadata");
@@ -76,22 +77,31 @@ exports.cashbackPayment = onDocumentCreated({
       return;
     }
 
-    // Помечаем referral как pending
     await referralRef.update({
       cashbackPending: true,
       cashbackPendingAt: admin.firestore.FieldValue.serverTimestamp(),
       buyerPayment: event.params.paymentId,
       buyerEmail: email,
+      buyerUid: event.params.uid,
+      orderNotificationSent: true,
     });
 
-    // Помечаем payment как pending для кешбека
     await event.data.ref.update({
       cashbackPending: true,
       cashbackPendingAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    console.log("✅ Cashback marked as pending for:", { referralCode, buyerEmail: email });
+    // Send notification to referrer
+    const sgKey = SENDGRID_API_KEY.value();
+    if (sgKey) {
+      sendgrid.setApiKey(sgKey);
+      await sendReferralOrderNotification(referral.email, email);
+    } else {
+      console.warn("⚠️ SendGrid API key not configured, skipping email");
+    }
+
+    console.log("✅ Cashback marked as pending and notification sent for:", { referralCode, buyerEmail: email });
   } catch (e) {
-    console.error("🔥 Error marking cashback pending:", e);
+    console.error("🔥 Error marking cashback pending or sending notification:", e);
   }
 });
